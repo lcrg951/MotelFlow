@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Habitaciones - Motel Flow</title>
+    <link rel="stylesheet" href="../static/style.css">
+</head>
+<body>
+    <header>
+        <h1>Motel Flow</h1>
+        <nav>
+            <a href="/admin">Panel Admin</a>
+            <a href="/empleados">Panel Empleados</a>
+            <a href="/login">Salir</a>
+        </nav>
+    </header>
+    <main>
+        <section class="habitaciones-panel">
+            <h2>Habitaciones</h2>
+            <div class="habitaciones-list">
+                {% for room in rooms %}
+                <div class="habitacion-panel">
+                    <img src="{{ url_for('static', filename=room.imagen) }}" alt="{{ room.nombre }}" style="width:120px;height:80px;object-fit:cover;border-radius:8px;display:block;margin-bottom:8px;">
+                    <h3>{{ room.nombre }}</h3>
+                    <p>{{ room.descripcion }}</p>
+                    <div class="precio">${{ "{:,".format(room.precio) }} COP</div>
+                </div>
+                {% endfor %}
+            </div>
+        </section>
+    </main>
+    <footer>
+        <p>&copy; 2026 Motel Flow. Todos los derechos reservados.</p>
+    </footer>
+</body>
+</html>

@@ -21,7 +21,7 @@
     <section class="catalogo">
         {% for room in rooms %}
         <div class="habitacion">
-            <div class="img-placeholder">Imagen aquí</div>
+            <img src="{{ url_for('static', filename=room.imagen) }}" alt="{{ room.nombre }}" style="width:180px;height:120px;object-fit:cover;border-radius:10px;margin-bottom:8px;display:block;">
             <h3>{{ room.nombre }}</h3>
             <p>{{ room.descripcion }}</p>
             <div class="precio">${{ "{:,}".format(room.precio) }} COP</div>
@@ -42,6 +42,7 @@
                     <label class="deco-option">
                         <input type="checkbox" name="decoraciones" value="{{ deco.id }}">
                         <div class="deco-info">
+                            <img src="{{ url_for('static', filename=deco.imagen) }}" alt="{{ deco.nombre }}" style="width:80px;height:80px;object-fit:cover;border-radius:8px;margin-bottom:6px;display:block;">
                             <strong>{{ deco.nombre }}</strong><br>
                             <span>{{ deco.descripcion }}</span><br>
                             <span class="precio">${{ "{:,}".format(deco.precio) }} COP</span>
