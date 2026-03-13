@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Panel de Empleados - Motel Flow</title>
+    <link rel="stylesheet" href="../static/style.css">
+</head>
+<body>
+    <header>
+        <h1>Motel Flow</h1>
+        <nav>
+            <a href="/">Inicio</a>
+            <a href="/login">Salir</a>
+        </nav>
+    </header>
+    <main>
+        <section class="login-section">
+            <h2>Panel de Empleados</h2>
+            <div id="turno-info" style="display:none; position:fixed; top:18px; left:18px; background:#fffbe6; color:#2d2d2d; border-radius:10px; padding:12px 22px; box-shadow:0 2px 8px rgba(0,0,0,0.10); font-weight:bold; z-index:300;">
+                Turno abierto: <span id="fecha-hora"></span>
+            </div>
+            <div class="panel-habs">
+                {% for i in range(1, 21) %}
+                <div class="hab-cuadro" id="hab{{i}}" onclick="abrirModalEstado({{i}})">
+                    <span>hab{{i}}</span>
+                    <div class="estado-hab" id="estado-hab{{i}}"></div>
+                </div>
+                {% endfor %}
+            </div>
+        </section>
+        <div id="modal-estado" class="modal" style="display:none;">
+            <div class="modal-content">
+                <h2>Selecciona el estado</h2>
+                <button class="reservar-btn" onclick="setEstado('libre')">Libre</button>
+                <button class="reservar-btn" onclick="setEstado('en servicio')">En servicio</button>
+                <button class="reservar-btn" onclick="setEstado('deshabilitada')">Deshabilitada</button>
+                <button class="reservar-btn" onclick="setEstado('por arreglar')">Por arreglar</button>
+            </div>
+        </div>
+        <script>
+            let habSeleccionada = null;
+            function abrirModalEstado(num) {
+                habSeleccionada = num;
+                document.getElementById('modal-estado').style.display = 'block';
+            }
+            function setEstado(estado) {
+                if (habSeleccionada) {
+                    localStorage.setItem('estado_hab'+habSeleccionada, estado);
+                    renderEstados();
+                }
+                document.getElementById('modal-estado').style.display = 'none';
+            }
+            function renderEstados() {
+                for (let i = 1; i <= 20; i++) {
+                    let estado = localStorage.getItem('estado_hab'+i) || '';
+                    let div = document.getElementById('estado-hab'+i);
+                    let cuadro = document.getElementById('hab'+i);
+                    div.textContent = estado;
+                    cuadro.classList.remove('libre','en-servicio','deshabilitada','por-arreglar');
+                    if (estado === 'libre') cuadro.classList.add('libre');
+                    if (estado === 'en servicio') cuadro.classList.add('en-servicio');
+                    if (estado === 'deshabilitada') cuadro.classList.add('deshabilitada');
+                    if (estado === 'por arreglar') cuadro.classList.add('por-arreglar');
+                }
+            }
+            document.addEventListener('DOMContentLoaded', renderEstados);
+            window.onclick = function(event) {
+                var modal = document.getElementById('modal-estado');
+                if (event.target == modal) modal.style.display = 'none';
+            }
+        </script>
+    </main>
+    <footer>
+        <p>&copy; 2026 Motel Flow. Todos los derechos reservados.</p>
+    </footer>
+    <div id="modal-turno" class="modal" style="display:block;">
+        <div class="modal-content">
+            <h2>¿Abrir nuevo turno?</h2>
+            <button class="reservar-btn" onclick="abrirTurno()">Aceptar</button>
+        </div>
+    </div>
+    <script>
+        function abrirTurno() {
+            document.getElementById('modal-turno').style.display = 'none';
+            var now = new Date();
+            var fecha = now.toLocaleDateString('es-CO', { year: 'numeric', month: 'long', day: 'numeric' });
+            var hora = now.toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            document.getElementById('fecha-hora').textContent = fecha + ' ' + hora;
+            document.getElementById('turno-info').style.display = 'block';
+        }
+    </script>
+</body>
+</html>

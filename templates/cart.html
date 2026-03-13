@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Carrito de Reservas - Motel Flow</title>
+    <link rel="stylesheet" href="../static/style.css">
+</head>
+<body>
+    <header>
+        <h1>Motel Flow</h1>
+        <nav>
+            <a href="/">Inicio</a>
+            <a href="/login">Login</a>
+        </nav>
+    </header>
+    <main>
+        <section class="cart-section">
+            <h2>Carrito de Reservas</h2>
+            {% if reservas and reservas|length > 0 %}
+                <ul style="list-style:none; padding:0;">
+                {% for r in reservas %}
+                    <li style="margin-bottom:18px; background:rgba(255,255,255,0.85); border-radius:10px; padding:16px; box-shadow:0 2px 8px rgba(0,0,0,0.06); display:flex; justify-content:space-between; align-items:center;">
+                        <div>
+                            <strong>{{ r.habitacion.nombre }}</strong><br>
+                            <span>{{ r.habitacion.descripcion }}</span><br>
+                            <span style="color:#ffd700; font-weight:bold;">${{ "{:,}".format(r.habitacion.precio) }} COP</span>
+                            {% if r.decoraciones and r.decoraciones|length > 0 %}
+                                <div style="margin-top:10px;">
+                                    <span style="font-weight:bold; color:#2d2d2d;">Decoraciones:</span>
+                                    <ul style="margin:6px 0 0 0; padding-left:18px;">
+                                    {% for deco in r.decoraciones %}
+                                        <li style="color:#555;">
+                                            {{ deco.nombre }} <span style="color:#ffd700; font-weight:bold;">+${{ "{:,}".format(deco.precio) }} COP</span>
+                                        </li>
+                                    {% endfor %}
+                                    </ul>
+                                </div>
+                            {% endif %}
+                            {% if r.tiempo %}
+                                <div style="margin-top:10px;">
+                                    <span style="font-weight:bold; color:#2d2d2d;">Tipo de estadía:</span>
+                                    <ul style="margin:6px 0 0 0; padding-left:18px;">
+                                        <li style="color:#555;">
+                                            {{ r.tiempo.nombre }} <span style="color:#ffd700; font-weight:bold;">+${{ "{:,}".format(r.tiempo.precio) }} COP</span>
+                                        </li>
+                                    </ul>
+                                </div>
+                            {% endif %}
+                        </div>
+                        <form action="/eliminar/{{ loop.index0 }}" method="post" style="margin:0;">
+                            <button type="submit" style="background:#ff4d4d; color:#fff; border:none; border-radius:6px; padding:8px 14px; font-weight:bold; cursor:pointer; margin-left:16px;">Eliminar</button>
+                        </form>
+                    </li>
+                {% endfor %}
+                </ul>
+                <div style="font-size:1.2em; font-weight:bold; margin-top:18px; text-align:right; color:#2d2d2d;">
+                    Total: <span style="color:#ffd700;">${{ "{:,}".format(total) }} COP</span>
+                </div>
+            {% else %}
+                <p>No has reservado ninguna habitación aún.</p>
+            {% endif %}
+        </section>
+    </main>
+    <footer>
+        <p>&copy; 2026 Motel Flow. Todos los derechos reservados.</p>
+    </footer>
+</body>
+</html>

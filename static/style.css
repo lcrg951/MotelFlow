@@ -1,0 +1,498 @@
+/* Panel de habitaciones */
+.panel-habs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 18px;
+    justify-content: center;
+    margin: 36px 0 0 0;
+}
+.hab-cuadro {
+    width: 110px;
+    height: 90px;
+    background: #fff;
+    border-radius: 14px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.10);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    font-weight: bold;
+    font-size: 1.1em;
+    cursor: pointer;
+    border: 2px solid #ffd70033;
+    transition: border 0.2s, background 0.2s;
+    position: relative;
+}
+.hab-cuadro span {
+    margin-bottom: 6px;
+}
+.estado-hab {
+    font-size: 0.98em;
+    font-weight: 500;
+    margin-top: 4px;
+    text-align: center;
+}
+.hab-cuadro.libre {
+    border: 2px solid #4caf50;
+    background: #eaffea;
+    color: #256029;
+}
+.hab-cuadro.en-servicio {
+    border: 2px solid #2196f3;
+    background: #e3f0ff;
+    color: #0d47a1;
+}
+.hab-cuadro.deshabilitada {
+    border: 2px solid #bdbdbd;
+    background: #f5f5f5;
+    color: #757575;
+}
+.hab-cuadro.por-arreglar {
+    border: 2px solid #ff9800;
+    background: #fff3e0;
+    color: #e65100;
+}
+/* Modal de decoración */
+.modal {
+    display: none;
+    position: fixed;
+    z-index: 200;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    overflow: auto;
+    background-color: rgba(44, 44, 44, 0.45);
+}
+.modal-content {
+    background: #fff;
+    margin: 60px auto;
+    padding: 36px 32px 28px 32px;
+    border-radius: 18px;
+    max-width: 420px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.18);
+    position: relative;
+    text-align: center;
+}
+.modal-content h2 {
+    margin-top: 0;
+    color: #2d2d2d;
+    font-size: 1.5em;
+    margin-bottom: 24px;
+}
+.close {
+    color: #aaa;
+    position: absolute;
+    top: 18px;
+    right: 24px;
+    font-size: 2em;
+    font-weight: bold;
+    cursor: pointer;
+    transition: color 0.2s;
+}
+.close:hover {
+    color: #ffd700;
+}
+.decoraciones-list {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    margin-bottom: 10px;
+}
+.deco-option {
+    display: flex;
+    align-items: flex-start;
+    background: linear-gradient(120deg, #fff 80%, #ffd70022 100%);
+    border-radius: 12px;
+    padding: 16px 18px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.07);
+    border: 1.5px solid #ffd70033;
+    cursor: pointer;
+    transition: border 0.2s;
+}
+.deco-option:hover {
+    border: 1.5px solid #ffd700;
+}
+.deco-option input[type="checkbox"] {
+    margin-right: 16px;
+    margin-top: 6px;
+    accent-color: #ffd700;
+    width: 18px;
+    height: 18px;
+}
+.deco-info {
+    text-align: left;
+    color: #2d2d2d;
+    font-size: 1.08em;
+}
+body {
+    font-family: 'Segoe UI', Arial, sans-serif;
+    background: linear-gradient(135deg, #e0c3fc 0%, #8ec5fc 100%);
+    margin: 0;
+    padding: 0;
+    color: #333;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+}
+header {
+    background: #2d2d2d;
+    color: #fff;
+    padding: 24px 0 16px 0;
+    text-align: center;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+header h1 {
+    margin: 0;
+    font-size: 2.7em;
+    letter-spacing: 2px;
+    font-weight: 700;
+}
+nav {
+    margin-top: 12px;
+}
+nav a {
+    color: #fff;
+    text-decoration: none;
+    margin: 0 18px;
+    font-weight: bold;
+    font-size: 1.1em;
+    transition: color 0.3s;
+}
+nav a:hover {
+    color: #ffd700;
+}
+.intro {
+    margin: 40px auto 20px auto;
+    max-width: 700px;
+    background: rgba(255,255,255,0.92);
+    padding: 36px;
+    border-radius: 18px;
+    box-shadow: 0 6px 24px rgba(0,0,0,0.10);
+    text-align: center;
+    font-size: 1.2em;
+    font-weight: 500;
+    color: #2d2d2d;
+}
+.catalogo {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 36px;
+    margin: 40px 0;
+}
+.habitacion {
+    background: linear-gradient(120deg, #fff 80%, #ffd700 100%);
+    border-radius: 18px;
+    box-shadow: 0 6px 24px rgba(0,0,0,0.14);
+    width: 340px;
+    padding: 28px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    margin-bottom: 24px;
+    transition: transform 0.2s, box-shadow 0.2s;
+    border: 1.5px solid #ffd70033;
+}
+.habitacion:hover {
+    transform: scale(1.04);
+    box-shadow: 0 12px 32px rgba(0,0,0,0.22);
+    border-color: #ffd700;
+}
+.habitacion .img-placeholder {
+    width: 260px;
+    height: 160px;
+    background: linear-gradient(135deg, #8ec5fc 0%, #e0c3fc 100%);
+    border-radius: 14px;
+    margin-bottom: 22px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #aaa;
+    font-size: 1.3em;
+    font-style: italic;
+    border: 2px dashed #ffd70099;
+}
+.habitacion h3 {
+    margin: 0 0 12px 0;
+    font-size: 1.5em;
+    color: #2d2d2d;
+    font-weight: 600;
+    letter-spacing: 1px;
+}
+.habitacion p {
+    margin: 0 0 14px 0;
+    color: #555;
+    font-size: 1.08em;
+}
+.habitacion .precio {
+    font-size: 1.22em;
+    color: #ffd700;
+    font-weight: bold;
+    margin-bottom: 18px;
+    letter-spacing: 1px;
+}
+.habitacion .reservar-btn {
+    background: linear-gradient(90deg, #ffd700 70%, #fff 100%);
+    color: #2d2d2d;
+    border: none;
+    border-radius: 10px;
+    padding: 12px 28px;
+    font-size: 1.08em;
+    font-weight: bold;
+    cursor: pointer;
+    transition: background 0.3s, color 0.3s;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+}
+.habitacion .reservar-btn:hover {
+    background: #ffb700;
+    color: #fff;
+}
+.cart-btn {
+    position: fixed;
+    left: 24px;
+    bottom: 24px;
+    background: #2d2d2d;
+    color: #ffd700;
+    border: none;
+    border-radius: 50%;
+    width: 60px;
+    height: 60px;
+    font-size: 2em;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.18);
+    cursor: pointer;
+    z-index: 100;
+    transition: background 0.3s;
+}
+.cart-btn:hover {
+    background: #ffd700;
+    color: #2d2d2d;
+}
+footer {
+    background: linear-gradient(90deg, #2d2d2d 60%, #ffd700 100%);
+    color: #fff;
+    text-align: center;
+    padding: 22px 0;
+    font-size: 1.1em;
+    font-weight: 500;
+    letter-spacing: 1px;
+    box-shadow: 0 -2px 12px rgba(0,0,0,0.12);
+    border-radius: 0 0 16px 16px;
+    position: fixed;
+    left: 0;
+    bottom: 0;
+    width: 100%;
+    z-index: 99;
+}
+.login-section, .cart-section {
+    max-width: 400px;
+    margin: 60px auto;
+    background: rgba(255,255,255,0.92);
+    padding: 32px;
+    border-radius: 16px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.08);
+}
+.login-section h2, .cart-section h2 {
+    margin-bottom: 24px;
+    color: #2d2d2d;
+}
+.login-section form label {
+    display: block;
+    margin-bottom: 8px;
+    color: #555;
+}
+.login-section form input {
+    width: 100%;
+    padding: 8px;
+    margin-bottom: 16px;
+    border-radius: 8px;
+    border: 1px solid #ccc;
+    font-size: 1em;
+}
+.login-section form button {
+    background: #ffd700;
+    color: #2d2d2d;
+    border: none;
+    border-radius: 8px;
+    padding: 10px 24px;
+    font-size: 1em;
+    font-weight: bold;
+    cursor: pointer;
+    transition: background 0.3s;
+}
+.login-section form button:hover {
+    background: #ffb700;
+    color: #fff;
+}
+header {
+    background: #2d2d2d;
+    color: #fff;
+    padding: 20px 0;
+    text-align: center;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+header h1 {
+    margin: 0;
+    font-size: 2.5em;
+    letter-spacing: 2px;
+}
+nav {
+    margin-top: 10px;
+}
+nav a {
+    color: #fff;
+    text-decoration: none;
+    margin: 0 15px;
+    font-weight: bold;
+    transition: color 0.3s;
+}
+nav a:hover {
+    color: #ffd700;
+}
+.intro {
+    margin: 40px auto 20px auto;
+    max-width: 700px;
+    background: rgba(255,255,255,0.85);
+    padding: 30px;
+    border-radius: 16px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.08);
+    text-align: center;
+}
+.catalogo {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 32px;
+    margin: 40px 0;
+}
+.habitacion {
+    background: #fff;
+    border-radius: 16px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+    width: 320px;
+    padding: 24px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    margin-bottom: 20px;
+    transition: transform 0.2s;
+}
+.habitacion:hover {
+    transform: scale(1.03);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.18);
+}
+.habitacion .img-placeholder {
+    width: 260px;
+    height: 160px;
+    background: linear-gradient(135deg, #8ec5fc 0%, #e0c3fc 100%);
+    border-radius: 12px;
+    margin-bottom: 18px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #aaa;
+    font-size: 1.2em;
+    font-style: italic;
+}
+.habitacion h3 {
+    margin: 0 0 10px 0;
+    font-size: 1.4em;
+    color: #2d2d2d;
+}
+.habitacion p {
+    margin: 0 0 12px 0;
+    color: #555;
+}
+.habitacion .precio {
+    font-size: 1.2em;
+    color: #ffd700;
+    font-weight: bold;
+    margin-bottom: 16px;
+}
+.habitacion .reservar-btn {
+    background: #ffd700;
+    color: #2d2d2d;
+    border: none;
+    border-radius: 8px;
+    padding: 10px 24px;
+    font-size: 1em;
+    font-weight: bold;
+    cursor: pointer;
+    transition: background 0.3s;
+}
+.habitacion .reservar-btn:hover {
+    background: #ffb700;
+}
+.cart-btn {
+    position: fixed;
+    left: 24px;
+    bottom: 24px;
+    background: #2d2d2d;
+    color: #ffd700;
+    border: none;
+    border-radius: 50%;
+    width: 60px;
+    height: 60px;
+    font-size: 2em;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.18);
+    cursor: pointer;
+    z-index: 100;
+    transition: background 0.3s;
+}
+.cart-btn:hover {
+    background: #ffd700;
+    color: #2d2d2d;
+}
+footer {
+    background: #2d2d2d;
+    color: #fff;
+    text-align: center;
+    padding: 18px 0;
+    margin-top: 40px;
+    border-radius: 0 0 16px 16px;
+}
+.login-section, .cart-section {
+    max-width: 400px;
+    margin: 60px auto;
+    background: rgba(255,255,255,0.92);
+    padding: 32px;
+    border-radius: 16px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.08);
+}
+.login-section h2, .cart-section h2 {
+    margin-bottom: 24px;
+    color: #2d2d2d;
+}
+.login-section form label {
+    display: block;
+    margin-bottom: 8px;
+    color: #555;
+}
+.login-section form input {
+    width: 100%;
+    padding: 8px;
+    margin-bottom: 16px;
+    border-radius: 8px;
+    border: 1px solid #ccc;
+    font-size: 1em;
+}
+.login-section form button {
+    background: #ffd700;
+    color: #2d2d2d;
+    border: none;
+    border-radius: 8px;
+    padding: 10px 24px;
+    font-size: 1em;
+    font-weight: bold;
+    cursor: pointer;
+    transition: background 0.3s;
+}
+.login-section form button:hover {
+    background: #ffb700;
+}
