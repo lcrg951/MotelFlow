@@ -15,60 +15,165 @@
         </nav>
     </header>
     <main>
-        <section class="login-section">
-            <h2>Panel de Empleados</h2>
-            <div id="turno-info" style="display:none; position:fixed; top:18px; left:18px; background:#fffbe6; color:#2d2d2d; border-radius:10px; padding:12px 22px; box-shadow:0 2px 8px rgba(0,0,0,0.10); font-weight:bold; z-index:300;">
-                Turno abierto: <span id="fecha-hora"></span>
-            </div>
-            <div class="panel-habs">
-                {% for i in range(1, 21) %}
-                <div class="hab-cuadro" id="hab{{i}}" onclick="abrirModalEstado({{i}})">
-                    <span>hab{{i}}</span>
-                    <div class="estado-hab" id="estado-hab{{i}}"></div>
+        <div style="display: flex; gap: 32px; justify-content: center; align-items: flex-start; flex-wrap: wrap;">
+            <section class="login-section" style="flex: 1 1 350px; min-width: 320px; max-width: 400px;">
+                <h2>Panel de Empleados</h2>
+                <div id="turno-info" style="display:none; position:fixed; top:24px; left:24px; background:#fffbe6; color:#2d2d2d; border-radius:10px; padding:12px 22px; box-shadow:0 2px 8px rgba(0,0,0,0.10); font-weight:bold; z-index:1000;">
+                    Turno abierto: <span id="fecha-hora"></span>
                 </div>
-                {% endfor %}
-            </div>
-        </section>
+                <div class="panel-habs">
+                    {% for i in range(1, 21) %}
+                    <div class="hab-cuadro" id="hab{{i}}" onclick="abrirModalEstado({{i}})">
+                        <span>hab{{i}}</span>
+                        <div class="estado-hab" id="estado-hab{{i}}"></div>
+                        <div class="estado-texto" id="estado-texto{{i}}" style="font-size:13px;margin-top:4px;color:#444;"></div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </section>
+            <section class="panel-extra" style="flex: 1 1 350px; min-width: 320px; max-width: 400px; background: #fffbe6; border-radius: 18px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); padding: 24px; margin-top: 32px; align-self: flex-start;">
+                <h2 style="text-align:center;">Habitaciones en servicio</h2>
+                <div id="resumen-habs"></div>
+                <div id="resumen-total" style="margin-top:18px;font-weight:bold;font-size:18px;text-align:center;"></div>
+            </section>
+        </div>
         <div id="modal-estado" class="modal" style="display:none;">
             <div class="modal-content">
                 <h2>Selecciona el estado</h2>
                 <button class="reservar-btn" onclick="setEstado('libre')">Libre</button>
-                <button class="reservar-btn" onclick="setEstado('en servicio')">En servicio</button>
+                <button class="reservar-btn" onclick="abrirModalServicio()">En servicio</button>
                 <button class="reservar-btn" onclick="setEstado('deshabilitada')">Deshabilitada</button>
                 <button class="reservar-btn" onclick="setEstado('por arreglar')">Por arreglar</button>
             </div>
         </div>
+        <!-- Modal para elegir tipo de servicio -->
+        <div id="modal-servicio" class="modal" style="display:none;">
+            <div class="modal-content">
+                <h2>Tipo de servicio</h2>
+                <button class="reservar-btn" onclick="setServicio('rato')">Rato (4 horas)</button>
+                <button class="reservar-btn" onclick="setServicio('amanecida')">Amanecida (12 horas)</button>
+            </div>
+        </div>
         <script>
             let habSeleccionada = null;
+            let intervalos = {};
+
             function abrirModalEstado(num) {
                 habSeleccionada = num;
                 document.getElementById('modal-estado').style.display = 'block';
             }
+            function abrirModalServicio() {
+                document.getElementById('modal-estado').style.display = 'none';
+                document.getElementById('modal-servicio').style.display = 'block';
+            }
             function setEstado(estado) {
                 if (habSeleccionada) {
                     localStorage.setItem('estado_hab'+habSeleccionada, estado);
+                    // Si se cambia a otro estado, limpiar temporizador
+                    if (estado !== 'en servicio') {
+                        localStorage.removeItem('timer_hab'+habSeleccionada);
+                        localStorage.removeItem('timer_type'+habSeleccionada);
+                        localStorage.removeItem('timer_start'+habSeleccionada);
+                        localStorage.removeItem('timer_overtime'+habSeleccionada);
+                    }
                     renderEstados();
                 }
                 document.getElementById('modal-estado').style.display = 'none';
             }
+            function setServicio(tipo) {
+                if (habSeleccionada) {
+                    localStorage.setItem('estado_hab'+habSeleccionada, 'en servicio');
+                    localStorage.setItem('timer_type'+habSeleccionada, tipo);
+                    localStorage.setItem('timer_start'+habSeleccionada, Date.now());
+                    localStorage.setItem('timer_hab'+habSeleccionada, tipo === 'rato' ? 4*60*60 : 12*60*60); // segundos
+                    localStorage.removeItem('timer_overtime'+habSeleccionada);
+                    renderEstados();
+                }
+                document.getElementById('modal-servicio').style.display = 'none';
+            }
             function renderEstados() {
+                let resumen = [];
+                let total = 0;
                 for (let i = 1; i <= 20; i++) {
                     let estado = localStorage.getItem('estado_hab'+i) || '';
                     let div = document.getElementById('estado-hab'+i);
                     let cuadro = document.getElementById('hab'+i);
-                    div.textContent = estado;
-                    cuadro.classList.remove('libre','en-servicio','deshabilitada','por-arreglar');
+                    let texto = document.getElementById('estado-texto'+i);
+                    div.innerHTML = '';
+                    cuadro.classList.remove('libre','en-servicio','deshabilitada','por-arreglar','amarillo');
                     if (estado === 'libre') cuadro.classList.add('libre');
                     if (estado === 'en servicio') cuadro.classList.add('en-servicio');
                     if (estado === 'deshabilitada') cuadro.classList.add('deshabilitada');
                     if (estado === 'por arreglar') cuadro.classList.add('por-arreglar');
+                    // Si está en servicio, mostrar contador y agregar a resumen
+                    if (estado === 'en servicio') {
+                        let tipo = localStorage.getItem('timer_type'+i);
+                        let start = parseInt(localStorage.getItem('timer_start'+i) || '0');
+                        let duracion = parseInt(localStorage.getItem('timer_hab'+i) || '0');
+                        let overtime = parseInt(localStorage.getItem('timer_overtime'+i) || '0');
+                        if (!intervalos[i]) {
+                            intervalos[i] = setInterval(() => renderEstados(), 1000);
+                        }
+                        let ahora = Date.now();
+                        let transcurrido = Math.floor((ahora - start)/1000);
+                        let restante = duracion - transcurrido;
+                        if (restante > 0) {
+                            div.innerHTML = tipo+': <span style="font-weight:bold">'+formatoTiempo(restante)+'</span>';
+                        } else {
+                            cuadro.classList.add('amarillo');
+                            let extra = transcurrido - duracion + overtime;
+                            div.innerHTML = '<span style="color:#b88600;font-weight:bold">Tiempo extra: '+formatoTiempo(extra)+'</span>';
+                            localStorage.setItem('timer_overtime'+i, extra);
+                        }
+                        // Calcular valor habitación
+                        let valor = 0;
+                        if (i >= 1 && i <= 14) valor = 60000;
+                        else if (i === 15 || i === 16) valor = 65000;
+                        else if (i === 17 || i === 18) valor = 90000;
+                        else if (i === 19 || i === 20) valor = 120000;
+                        if (tipo === 'amanecida') valor += 45000;
+                        resumen.push('Hab ' + i + ' (' + (tipo === 'amanecida' ? 'Amanecida' : 'Rato') + '): $' + valor.toLocaleString());
+                        total += valor;
+                    } else {
+                        if (intervalos[i]) {
+                            clearInterval(intervalos[i]);
+                            intervalos[i] = null;
+                        }
+                    }
+                    // Mostrar texto de estado
+                    if (texto) {
+                        let label = '';
+                        if (estado === 'libre') label = 'Estado: Libre';
+                        else if (estado === 'en servicio') label = 'Estado: En servicio';
+                        else if (estado === 'deshabilitada') label = 'Estado: Deshabilitada';
+                        else if (estado === 'por arreglar') label = 'Estado: Por arreglar';
+                        else label = 'Estado: Sin asignar';
+                        texto.textContent = label;
+                    }
                 }
+                // Mostrar resumen
+                document.getElementById('resumen-habs').innerHTML = resumen.length ? resumen.map(x => '<div style="margin-bottom:6px;">'+x+'</div>').join('') : '<span style="color:#888">No hay habitaciones en servicio</span>';
+                document.getElementById('resumen-total').textContent = resumen.length ? 'Total: $' + total.toLocaleString() : '';
+            }
+            function formatoTiempo(segundos) {
+                let s = Math.abs(segundos);
+                let h = Math.floor(s/3600);
+                let m = Math.floor((s%3600)/60);
+                let sec = s%60;
+                return (h>0?h+':':'')+String(m).padStart(2,'0')+':'+String(sec).padStart(2,'0');
             }
             document.addEventListener('DOMContentLoaded', renderEstados);
             window.onclick = function(event) {
-                var modal = document.getElementById('modal-estado');
-                if (event.target == modal) modal.style.display = 'none';
+                var modal1 = document.getElementById('modal-estado');
+                var modal2 = document.getElementById('modal-servicio');
+                if (event.target == modal1) modal1.style.display = 'none';
+                if (event.target == modal2) modal2.style.display = 'none';
             }
+            // Sincronización entre pestañas/ventanas
+            window.addEventListener('storage', function(e) {
+                if (e.key && e.key.startsWith('estado_hab')) renderEstados();
+                if (e.key && e.key.startsWith('timer_')) renderEstados();
+            });
         </script>
     </main>
     <footer>
