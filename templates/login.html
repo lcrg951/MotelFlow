@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login - Motel Flow</title>
+    <link rel="stylesheet" href="../static/style.css">
+</head>
+<body>
+    <header>
+        <h1>Motel Flow</h1>
+        <nav>
+            <a href="/">Inicio</a>
+            <a href="/cart">Carrito</a>
+        </nav>
+    </header>
+    <main>
+        <section class="login-section">
+            <h2>Iniciar Sesión</h2>
+            <form id="login-form">
+                <label for="usuario">Usuario:</label>
+                <input type="text" id="usuario" name="usuario" required>
+                <label for="contrasena">Contraseña:</label>
+                <input type="password" id="contrasena" name="contrasena" required>
+                <button type="button" onclick="abrirModalAcceso()">Entrar</button>
+            </form>
+            <div id="modal-acceso" class="modal" style="display:none;">
+                <div class="modal-content">
+                    <h2>¿Desea acceder como?</h2>
+                    <button class="reservar-btn" style="margin:10px 0;" onclick="redirigirAcceso('empleados')">Empleado</button>
+                    <button class="reservar-btn" style="margin:10px 0;" onclick="redirigirAcceso('admin')">Administrador</button>
+                </div>
+            </div>
+            <script>
+                function abrirModalAcceso() {
+                    document.getElementById('modal-acceso').style.display = 'block';
+                }
+                function redirigirAcceso(tipo) {
+                    var form = document.getElementById('login-form');
+                    var usuario = form.usuario.value;
+                    var contrasena = form.contrasena.value;
+                    if (!usuario || !contrasena) {
+                        alert('Por favor, complete usuario y contraseña.');
+                        return;
+                    }
+                    if (tipo === 'empleados') {
+                        form.action = '/empleados';
+                    } else {
+                        form.action = '/admin';
+                    }
+                    form.method = 'post';
+                    form.submit();
+                }
+                window.onclick = function(event) {
+                    var modal = document.getElementById('modal-acceso');
+                    if (event.target == modal) {
+                        modal.style.display = 'none';
+                    }
+                }
+            </script>
+        </section>
+    </main>
+    <footer>
+        <p>&copy; 2026 Motel Flow. Todos los derechos reservados.</p>
+    </footer>
+</body>
+</html>
