@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Motel Flow{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <header class="main-header-alt">
+        <div class="header-fachada-img-alt" style="height:320px;max-height:320px;width:100vw;overflow:hidden;background-image:url('{{ url_for('static', filename='img/fachada.jpeg') }}');background-size:cover;background-position:center;border-bottom-left-radius:60px;border-bottom-right-radius:60px;"></div>
+        <div class="header-bar">
+            <div class="logo">
+                <h1>Motel Flow</h1>
+                <div class="subtitle">El secreto del confort</div>
+            </div>
+            <nav class="nav-menu">
+                <a href="/">Inicio</a>
+                <a href="/cart" class="cart-btn-header">🛒 Carrito</a>
+                <a href="/login" class="login-btn-header">Login</a>
+            </nav>
+        </div>
+    </header>
+    <main>
+        {% block content %}{% endblock %}
+    </main>
+    <footer>
+        <p>&copy; 2026 Motel Flow. Todos los derechos reservados.</p>
+    </footer>
+</body>
+</html>

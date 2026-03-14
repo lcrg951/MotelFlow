@@ -1,141 +1,116 @@
-<!DOCTYPE html>
-<html lang="es">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Motel Flow</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-</head>
-<body>
-    <header class="main-header">
-        <div class="header-bg"></div>
-        <div class="header-content">
-            <div class="logo">
-                <h1>Motel Flow</h1>
-            </div>
-            <nav class="nav-menu">
-                <a href="/">Inicio</a>
-                <a href="/login">Login</a>
-            </nav>
-        </div>
-    </header>
-    <div class="intro">
+{% extends 'base.html' %}
+{% block title %}Inicio | Motel Flow{% endblock %}
+{% block content %}
+<section class="intro">
+    <div class="intro-content">
         <h2>Bienvenido a Motel Flow</h2>
         <p>Descubre el lujo, confort y privacidad de nuestro motel 5 estrellas. Elige entre nuestras exclusivas habitaciones y vive una experiencia inolvidable.</p>
     </div>
-    <section class="catalogo">
-        {% for room in rooms %}
-        <div class="habitacion">
-            <img src="{{ url_for('static', filename=room.imagen) }}" alt="{{ room.nombre }}" style="width:180px;height:120px;object-fit:cover;border-radius:10px;margin-bottom:8px;display:block;">
-            <h3>{{ room.nombre }}</h3>
-            <p>{{ room.descripcion }}</p>
-            <div class="precio">${{ "{:,}".format(room.precio) }} COP</div>
-            <button class="reservar-btn" onclick="abrirModal({{ room.id }})" type="button">Reservar</button>
-        </div>
-        {% endfor %}
-    </section>
-
-    <!-- Modal de decoración -->
-    <div id="modal-decoracion" class="modal" style="display:none;">
-        <div class="modal-content">
-            <span class="close" onclick="cerrarModal()">&times;</span>
-            <h2>Elige un plan de decoración</h2>
-            <form id="form-decoracion">
-                <input type="hidden" name="room_id" id="room_id_modal">
-                <div class="decoraciones-list">
-                    {% for deco in decoraciones %}
-                    <label class="deco-option">
-                        <input type="checkbox" name="decoraciones" value="{{ deco.id }}">
-                        <div class="deco-info">
-                            <img src="{{ url_for('static', filename=deco.imagen) }}" alt="{{ deco.nombre }}" style="width:80px;height:80px;object-fit:cover;border-radius:8px;margin-bottom:6px;display:block;">
-                            <strong>{{ deco.nombre }}</strong><br>
-                            <span>{{ deco.descripcion }}</span><br>
-                            <span class="precio">${{ "{:,}".format(deco.precio) }} COP</span>
-                        </div>
-                    </label>
-                    {% endfor %}
-                </div>
-                <button class="reservar-btn" type="button" style="margin-top:18px;" onclick="abrirModalTiempo()">Reservar</button>
-            </form>
-        </div>
+</section>
+<section class="catalogo">
+    {% for room in rooms %}
+    <div class="habitacion">
+        <img src="{{ url_for('static', filename=room.imagen) }}" alt="{{ room.nombre }}" class="img-habitacion">
+        <h3>{{ room.nombre }}</h3>
+        <p>{{ room.descripcion }}</p>
+        <div class="precio">${{ "{:,}".format(room.precio) }} COP</div>
+        <button class="reservar-btn" onclick="abrirModal({{ room.id }})" type="button">Reservar</button>
     </div>
+    {% endfor %}
+</section>
 
-    <!-- Modal de tiempo (Rato/Amanecida) -->
-    <div id="modal-tiempo" class="modal" style="display:none;">
-        <div class="modal-content">
-            <span class="close" onclick="cerrarModalTiempo()">&times;</span>
-            <h2>¿Qué tipo de estadía deseas?</h2>
-            <form id="form-tiempo" action="/reservar" method="post">
-                <input type="hidden" name="room_id" id="room_id_modal_tiempo">
-                <input type="hidden" name="decoraciones" id="decoraciones_modal_tiempo">
-                <div class="decoraciones-list">
-                    {% for t in tiempos %}
-                    <label class="deco-option">
-                        <input type="radio" name="tiempo" value="{{ t.id }}" required>
-                        <div class="deco-info">
-                            <strong>{{ t.nombre }}</strong><br>
-                            <span class="precio">${{ "{:,}".format(t.precio) }} COP</span>
-                        </div>
-                    </label>
-                    {% endfor %}
-                </div>
-                <button class="reservar-btn" type="submit" style="margin-top:18px;">Confirmar reserva</button>
-            </form>
-        </div>
+<!-- Modal de decoración -->
+<div id="modal-decoracion" class="modal" style="display:none;">
+    <div class="modal-content">
+        <span class="close" onclick="cerrarModal()">&times;</span>
+        <h2>Elige un plan de decoración</h2>
+        <form id="form-decoracion">
+            <input type="hidden" name="room_id" id="room_id_modal">
+            <div class="decoraciones-list">
+                {% for deco in decoraciones %}
+                <label class="deco-option">
+                    <input type="checkbox" name="decoraciones" value="{{ deco.id }}">
+                    <div class="deco-info">
+                        <img src="{{ url_for('static', filename=deco.imagen) }}" alt="{{ deco.nombre }}" class="img-deco">
+                        <strong>{{ deco.nombre }}</strong><br>
+                        <span>{{ deco.descripcion }}</span><br>
+                        <span class="precio">${{ "{:,}".format(deco.precio) }} COP</span>
+                    </div>
+                </label>
+                {% endfor %}
+            </div>
+            <button class="reservar-btn" type="button" style="margin-top:18px;" onclick="abrirModalTiempo()">Reservar</button>
+        </form>
     </div>
+</div>
 
-    <script>
-        let decoracionesSeleccionadas = [];
-        function abrirModal(roomId) {
-            document.getElementById('modal-decoracion').style.display = 'block';
-            document.getElementById('room_id_modal').value = roomId;
-            decoracionesSeleccionadas = [];
-            // Limpiar checks
-            document.querySelectorAll('#modal-decoracion input[type=checkbox]').forEach(e => e.checked = false);
-        }
-        function cerrarModal() {
-            document.getElementById('modal-decoracion').style.display = 'none';
-        }
-        function abrirModalTiempo() {
-            // Obtener habitación y decoraciones seleccionadas
-            const roomId = document.getElementById('room_id_modal').value;
-            const decoChecks = document.querySelectorAll('#modal-decoracion input[type=checkbox]:checked');
-            let decoIds = [];
-            decoChecks.forEach(e => decoIds.push(e.value));
-            // Pasar datos al segundo modal
-            document.getElementById('modal-decoracion').style.display = 'none';
-            document.getElementById('modal-tiempo').style.display = 'block';
-            document.getElementById('room_id_modal_tiempo').value = roomId;
-            document.getElementById('decoraciones_modal_tiempo').value = decoIds.join(',');
-        }
-        function cerrarModalTiempo() {
-            document.getElementById('modal-tiempo').style.display = 'none';
-        }
-        // Al enviar el form de tiempo, convertir decoraciones a array
-        document.addEventListener('DOMContentLoaded', function() {
-            document.getElementById('form-tiempo').addEventListener('submit', function(e) {
-                let decoInput = document.getElementById('decoraciones_modal_tiempo');
-                let decoArr = decoInput.value ? decoInput.value.split(',') : [];
-                // Crear inputs ocultos para cada decoración
-                decoArr.forEach(function(val) {
-                    let input = document.createElement('input');
-                    input.type = 'hidden';
-                    input.name = 'decoraciones';
-                    input.value = val;
-                    document.getElementById('form-tiempo').appendChild(input);
-                });
+<!-- Modal de tiempo (Rato/Amanecida) -->
+<div id="modal-tiempo" class="modal" style="display:none;">
+    <div class="modal-content">
+        <span class="close" onclick="cerrarModalTiempo()">&times;</span>
+        <h2>¿Qué tipo de estadía deseas?</h2>
+        <form id="form-tiempo" action="/reservar" method="post">
+            <input type="hidden" name="room_id" id="room_id_modal_tiempo">
+            <input type="hidden" name="decoraciones" id="decoraciones_modal_tiempo">
+            <div class="decoraciones-list">
+                {% for t in tiempos %}
+                <label class="deco-option">
+                    <input type="radio" name="tiempo" value="{{ t.id }}" required>
+                    <div class="deco-info">
+                        <strong>{{ t.nombre }}</strong><br>
+                        <span class="precio">${{ "{:,}".format(t.precio) }} COP</span>
+                    </div>
+                </label>
+                {% endfor %}
+            </div>
+            <button class="reservar-btn" type="submit" style="margin-top:18px;">Confirmar reserva</button>
+        </form>
+    </div>
+</div>
+
+<script>
+    let decoracionesSeleccionadas = [];
+    function abrirModal(roomId) {
+        document.getElementById('modal-decoracion').style.display = 'block';
+        document.getElementById('room_id_modal').value = roomId;
+        decoracionesSeleccionadas = [];
+        document.querySelectorAll('#modal-decoracion input[type=checkbox]').forEach(e => e.checked = false);
+    }
+    function cerrarModal() {
+        document.getElementById('modal-decoracion').style.display = 'none';
+    }
+    function abrirModalTiempo() {
+        const roomId = document.getElementById('room_id_modal').value;
+        const decoChecks = document.querySelectorAll('#modal-decoracion input[type=checkbox]:checked');
+        let decoIds = [];
+        decoChecks.forEach(e => decoIds.push(e.value));
+        document.getElementById('modal-decoracion').style.display = 'none';
+        document.getElementById('modal-tiempo').style.display = 'block';
+        document.getElementById('room_id_modal_tiempo').value = roomId;
+        document.getElementById('decoraciones_modal_tiempo').value = decoIds.join(',');
+    }
+    function cerrarModalTiempo() {
+        document.getElementById('modal-tiempo').style.display = 'none';
+    }
+    document.addEventListener('DOMContentLoaded', function() {
+        document.getElementById('form-tiempo').addEventListener('submit', function(e) {
+            let decoInput = document.getElementById('decoraciones_modal_tiempo');
+            let decoArr = decoInput.value ? decoInput.value.split(',') : [];
+            decoArr.forEach(function(val) {
+                let input = document.createElement('input');
+                input.type = 'hidden';
+                input.name = 'decoraciones';
+                input.value = val;
+                document.getElementById('form-tiempo').appendChild(input);
             });
         });
-        window.onclick = function(event) {
-            var modal1 = document.getElementById('modal-decoracion');
-            var modal2 = document.getElementById('modal-tiempo');
-            if (event.target == modal1) cerrarModal();
-            if (event.target == modal2) cerrarModalTiempo();
-        }
-    </script>
-    <button class="cart-btn" onclick="window.location.href='/cart'" title="Ver carrito">🛒</button>
-    <footer>
-        <p>&copy; 2026 Motel Flow. Todos los derechos reservados.</p>
-    </footer>
-</body>
-</html>
+    });
+    window.onclick = function(event) {
+        var modal1 = document.getElementById('modal-decoracion');
+        var modal2 = document.getElementById('modal-tiempo');
+        if (event.target == modal1) cerrarModal();
+        if (event.target == modal2) cerrarModalTiempo();
+    }
+</script>
+<button class="cart-btn" onclick="window.location.href='/cart'" title="Ver carrito">🛒</button>
+{% endblock %}
