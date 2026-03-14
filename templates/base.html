@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Motel Flow{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600&family=Playfair+Display:wght@700&display=swap" rel="stylesheet">
+    {% block head %}{% endblock %}
+</head>
+<body>
+    <header class="main-header">
+        <div class="header-bg-media" style="height:400px;max-height:400px;overflow:hidden;">
+            <video autoplay loop muted playsinline poster="{{ url_for('static', filename='img/fachada.jpeg') }}" id="header-video" style="width:100vw;height:400px;max-height:400px;object-fit:cover;"></video>
+            <script>
+            window.addEventListener('DOMContentLoaded', function() {
+                var video = document.getElementById('header-video');
+                video.src = "{{ url_for('static', filename='video/video.mp4') }}";
+            });
+            </script>
+            <div class="header-overlay"></div>
+        </div>
+        <div class="header-bar">
+            <div class="logo">
+                <h1>Motel Flow</h1>
+                <div class="subtitle">El secreto del confort</div>
+            </div>
+            <nav class="nav-menu">
+                <a href="/">Inicio</a>
+                <a href="/cart" class="cart-btn-header">🛒 Carrito</a>
+                <a href="/login" class="login-btn-header">Login</a>
+            </nav>
+        </div>
+    </header>
+    <main>
+        {% block content %}{% endblock %}
+    </main>
+    <footer>
+        <p>&copy; 2026 Motel Flow. Todos los derechos reservados.</p>
+    </footer>
+</body>
+</html>

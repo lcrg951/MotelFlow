@@ -1,48 +1,234 @@
+/* Imagen de fachada en header para páginas que no son el index */
+.header-fachada-img {
+    width: 100vw;
+    height: 320px;
+    max-height: 320px;
+    background-image: url("../static/img/fachada.jpeg");
+    background-size: cover;
+    background-position: center;
+    filter: brightness(0.55) grayscale(0.08) blur(0.5px);
+    border-bottom-left-radius: 60px;
+    border-bottom-right-radius: 60px;
+    position: relative;
+    z-index: 1;
+}
+@media (max-width: 700px) {
+    .header-fachada-img {
+        height: 180px !important;
+        max-height: 180px !important;
+    }
+}
+
+/* Panel central elegante para mensajes y títulos en todas las páginas */
+.panel-central {
+    margin: 40px auto 24px auto;
+    padding: 36px 32px 28px 32px;
+    max-width: 900px;
+    background: #fffbe6cc;
+    border-radius: 32px;
+    box-shadow: 0 6px 32px 0 rgba(191,161,58,0.10), 0 1.5px 0 #e7d9b6;
+    border: 2.5px solid #e7d9b6;
+    text-align: center;
+    font-family: 'Georgia', 'Times New Roman', serif;
+    color: #bfa13a;
+    font-size: 2.1rem;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+}
+@media (max-width: 700px) {
+    .panel-central {
+        padding: 18px 8px 16px 8px;
+        font-size: 1.2rem;
+    }
+}
+@media (max-width: 700px) {
+    .header-bg-media {
+        height: 180px !important;
+    }
+    .header-bg-media video,
+    .header-bg-media img {
+        height: 180px !important;
+        max-height: 180px !important;
+    }
+}
 /* Panel de habitaciones */
 /* ---- DISEÑO ELEGANTE Y MINIMALISTA ---- */
 body {
-    margin: 0;
-    padding: 0;
-    font-family: 'Montserrat', 'Lato', Arial, sans-serif;
-    background: linear-gradient(90deg, #fff 60%, #e7d9c4 100%);
-    color: #3a2412;
-}
-/* Header con imagen de fondo y forma curva */
-.main-header {
-    position: relative;
-    height: 420px;
-    background: none;
-    overflow: hidden;
-    box-shadow: 0 4px 24px #000a;
-    border-bottom-left-radius: 80px;
-    border-bottom-right-radius: 80px;
-}
-.header-bg {
-    position: absolute;
-    top: 0; left: 0; right: 0; bottom: 0;
-    background: url('img/fachada.jpeg') center center/cover no-repeat;
-    z-index: 1;
-    clip-path: ellipse(85% 75% at 50% 45%);
-}
-.header-bg::after {
-    content: '';
-    position: absolute;
-    top: 0; left: 0; right: 0; bottom: 0;
-    background: linear-gradient(135deg, rgba(24,24,24,0.7) 60%, rgba(191,161,74,0.25) 100%);
-    z-index: 2;
-    border-bottom-left-radius: 80px;
-    border-bottom-right-radius: 80px;
-}
-.header-content {
-    position: relative;
-    z-index: 3;
+    /* HEADER BAR & NAV MENU - FORZAR VISIBILIDAD Y RESPONSIVIDAD */
+    .header-bar {
+        display: flex !important;
+        justify-content: space-between !important;
+        align-items: center !important;
+        padding: 30px 0 0 0 !important;
+        width: 100% !important;
+        background: none !important;
+        position: absolute !important;
+        top: 0 !important;
+        left: 0 !important;
+        z-index: 100 !important;
+    }
+    .nav-menu {
+        display: flex !important;
+        gap: 2vw !important;
+        align-items: center !important;
+        justify-content: flex-end !important;
+        width: auto !important;
+        z-index: 101 !important;
+    }
+    .nav-menu a {
+        display: inline-block !important;
+        padding: 8px 28px !important;
+        margin: 0 8px !important;
+        border-radius: 22px !important;
+        background: linear-gradient(90deg, #fffbe6 60%, #f7e7b6 100%) !important;
+        color: #bfa13a !important;
+        font-weight: 600 !important;
+        font-size: 1.1rem !important;
+        box-shadow: 0 2px 8px 0 rgba(191,161,58,0.08) !important;
+        border: 1.5px solid #e7d9b6 !important;
+        text-decoration: none !important;
+        transition: background 0.2s, color 0.2s, box-shadow 0.2s !important;
+        position: relative !important;
+        z-index: 102 !important;
+    }
+    @media (max-width: 700px) {
+        .header-bar {
+            flex-direction: column !important;
+            align-items: stretch !important;
+            padding: 18px 0 0 0 !important;
+        }
+        .nav-menu {
+            flex-direction: column !important;
+            gap: 10px !important;
+            align-items: flex-end !important;
+            width: 100% !important;
+        }
+        .nav-menu a {
+            width: 90vw !important;
+            margin: 0 auto 8px auto !important;
+            text-align: center !important;
+        }
+    }
+.video-bg video {
     width: 100%;
     height: 100%;
+    object-fit: cover;
+    filter: brightness(0.55) grayscale(0.08) blur(0.5px);
+}
+.header-overlay {
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: linear-gradient(135deg, rgba(255,255,255,0.25) 0%, rgba(191,161,74,0.18) 100%);
+    z-index: 2;
+    border-bottom-left-radius: 60px;
+    border-bottom-right-radius: 60px;
+}
+.header-bar {
+    position: relative;
+    z-index: 3;
+    width: 100vw;
+    min-width: 100vw;
     display: flex;
-    flex-direction: column;
     align-items: center;
+    justify-content: space-between;
+    padding: 0 4vw;
+    height: 120px;
+    background: transparent;
+    box-sizing: border-box;
+    flex-wrap: wrap;
+    visibility: visible !important;
+    opacity: 1 !important;
+}
+.logo h1 {
+    font-family: 'Playfair Display', serif;
+    font-size: 2.8em;
+    color: #bfa14a;
+    letter-spacing: 2px;
+    margin: 0 0 4px 0;
+    text-shadow: 0 4px 32px #000a;
+}
+.logo .subtitle {
+    color: #fffbe6;
+    font-size: 1.1em;
+    letter-spacing: 1px;
+    margin-left: 2px;
+}
+.nav-menu {
+    display: flex;
+    gap: 2vw;
+    align-items: center;
+    flex-wrap: wrap;
     justify-content: flex-end;
-    padding-bottom: 48px;
+    max-width: 70vw;
+    visibility: visible !important;
+    opacity: 1 !important;
+}
+.nav-menu a {
+    color: #bfa14a;
+    text-decoration: none;
+    font-size: 1.1em;
+    font-weight: 600;
+    letter-spacing: 1px;
+    padding: 8px 18px;
+    border-radius: 24px;
+    border: 1.5px solid #bfa14a;
+    background: rgba(255,255,255,0.18);
+    transition: background 0.2s, color 0.2s, border 0.2s;
+    box-shadow: 0 2px 8px #bfa14a22;
+    margin-bottom: 8px;
+    white-space: nowrap;
+    display: inline-block !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+}
+@media (max-width: 900px) {
+    .header-bar {
+        flex-direction: column;
+        height: auto;
+        padding: 0 2vw;
+    }
+    .nav-menu {
+        gap: 1vw;
+        max-width: 100vw;
+        justify-content: center;
+    }
+    .nav-menu a {
+        font-size: 1em;
+        padding: 8px 10px;
+        margin-bottom: 6px;
+    }
+    .logo h1 {
+        font-size: 2em;
+    }
+}
+@media (max-width: 600px) {
+    .header-bar {
+        flex-direction: column;
+        height: auto;
+        padding: 0 1vw;
+    }
+    .nav-menu {
+        gap: 0.5vw;
+        max-width: 100vw;
+        justify-content: center;
+        flex-wrap: wrap;
+    }
+    .nav-menu a {
+        font-size: 0.95em;
+        padding: 6px 6px;
+        margin-bottom: 4px;
+    }
+    .logo h1 {
+        font-size: 1.3em;
+    }
+}
+.nav-menu a:hover {
+    background: #bfa14a;
+    color: #fff;
+    border-color: #bfa14a;
+}
+.cart-btn-header, .login-btn-header {
+    display: inline-block;
 }
 .logo h1 {
     font-family: 'Playfair Display', serif;
@@ -75,31 +261,48 @@ body {
 }
 
 /* Intro principal sobre fondo semi-transparente */
+/* BLOQUE DE BIENVENIDA HORIZONTAL Y DESTACADO */
 .intro {
-    text-align: center;
-    margin: 0 auto;
-    margin-top: -60px;
-    margin-bottom: 48px;
-    max-width: 700px;
-    background: rgba(42,26,10,0.85);
-    border-radius: 24px;
-    box-shadow: 0 4px 32px #0004;
-    padding: 36px 32px;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+    width: 100vw;
+    min-width: 100vw;
+    margin: 0 auto 32px auto;
+    padding: 0;
     position: relative;
     z-index: 3;
 }
-.intro h2 {
+.intro-content {
+    background: linear-gradient(90deg, #fffbe6 60%, #fff 100%);
+    border-radius: 32px;
+    box-shadow: 0 4px 32px #bfa14a33;
+    padding: 36px 64px;
+    margin: 0 auto 32px auto;
+    width: 100vw;
+    min-width: 100vw;
+    max-width: 100vw;
+    text-align: center;
+    border: 2px solid #bfa14a;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+.intro-content h2 {
     font-family: 'Playfair Display', serif;
-    font-size: 2.6em;
-    color: #ffd700;
+    font-size: 2.8em;
+    color: #bfa14a;
     margin-bottom: 18px;
     letter-spacing: 1px;
+    text-shadow: 0 2px 12px #fffbe6;
 }
-.intro p {
-    color: #fff;
-    font-size: 1.18em;
+.intro-content p {
+    color: #2a1a0a;
+    font-size: 1.25em;
     line-height: 1.7;
     margin-bottom: 0;
+    font-weight: 500;
 }
 
 /* Botones dorados minimalistas */
@@ -122,39 +325,62 @@ body {
 }
 
 /* Tarjetas de habitaciones */
+/* TARJETAS DE HABITACIONES MODERNAS */
 .catalogo {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 32px;
-    justify-content: center;
-    margin-bottom: 48px;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 36px;
+    justify-items: center;
+    align-items: stretch;
+    margin: 0 auto 48px auto;
+    width: 100vw;
+    max-width: 100vw;
+    box-sizing: border-box;
+    padding: 0 2vw;
 }
 .habitacion {
-    background: rgba(42,26,10,0.92);
-    border-radius: 18px;
-    box-shadow: 0 2px 16px #0003;
-    padding: 24px 18px 18px 18px;
-    width: 260px;
+    background: linear-gradient(120deg, #fff 80%, #fffbe6 100%);
+    border-radius: 24px;
+    box-shadow: 0 2px 16px #bfa14a22;
+    padding: 28px 18px 18px 18px;
+    width: 100%;
+    max-width: 340px;
+    min-width: 260px;
     text-align: center;
-    color: #ffd700;
+    color: #bfa14a;
     display: flex;
     flex-direction: column;
     align-items: center;
     margin-bottom: 0;
+    border: 2px solid #bfa14a33;
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+.habitacion:hover {
+    transform: scale(1.04);
+    box-shadow: 0 8px 32px #bfa14a44;
+    border-color: #bfa14a;
+}
+.img-habitacion {
+    width: 220px;
+    height: 140px;
+    object-fit: cover;
+    border-radius: 14px;
+    margin-bottom: 12px;
+    box-shadow: 0 2px 12px #bfa14a22;
 }
 .habitacion h3 {
     font-family: 'Playfair Display', serif;
     font-size: 1.35em;
-    color: #ffd700;
+    color: #bfa14a;
     margin: 10px 0 8px 0;
 }
 .habitacion p {
-    color: #fff;
+    color: #2a1a0a;
     font-size: 1em;
     margin-bottom: 8px;
 }
 .habitacion .precio {
-    color: #ffd700;
+    color: #bfa14a;
     font-weight: bold;
     font-size: 1.1em;
     margin-bottom: 8px;
@@ -238,32 +464,29 @@ body {
 .intro {
     text-align: center;
     margin: 0 auto;
-    margin-top: 32px;
+    margin-top: -60px;
     margin-bottom: 48px;
-    width: 98vw;
-    max-width: 1400px;
-    background: linear-gradient(90deg, #fff 80%, #e7d9c4 100%);
+    max-width: 700px;
+    background: linear-gradient(135deg, rgba(24,24,24,0.95) 80%, rgba(191,161,74,0.15) 100%);
     border-radius: 32px;
-    box-shadow: 0 4px 32px #c2b6a088;
-    padding: 56px 48px;
+    box-shadow: 0 4px 32px #0008;
+    padding: 36px 32px;
     position: relative;
     z-index: 3;
-    border: 1.5px solid #e7d9c4;
+    border: 1.5px solid #bfa14a;
 }
 .intro h2 {
     font-family: 'Playfair Display', serif;
-    font-size: 3em;
-    color: #3a2412;
-    margin-bottom: 28px;
+    font-size: 2.6em;
+    color: #bfa14a;
+    margin-bottom: 18px;
     letter-spacing: 1px;
-    font-weight: bold;
 }
 .intro p {
-    color: #5a3c1a;
-    font-size: 1.35em;
+    color: #fffbe6;
+    font-size: 1.18em;
     line-height: 1.7;
     margin-bottom: 0;
-    font-weight: 500;
 }
 
 /* Botones dorados minimalistas */
@@ -524,7 +747,7 @@ nav a:hover {
 .habitacion .img-placeholder {
     width: 260px;
     height: 160px;
-    background: linear-gradient(135deg, #8ec5fc 0%, #e8dff1 100%);
+    background: linear-gradient(135deg, #8ec5fc 0%, #e0c3fc 100%);
     border-radius: 14px;
     margin-bottom: 22px;
     display: flex;
