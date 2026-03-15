@@ -51,6 +51,48 @@
         max-height: 180px !important;
     }
 }
+
+footer{
+    background:#1f1f1f;
+    color:white;
+    padding:10px 0;
+    font-size:13px;
+}
+
+.contenedor-footer{
+    display:flex;
+    justify-content:space-around;
+    align-items:center;
+    max-width:1200px;
+    margin:auto;
+    gap:20px;
+}
+
+.footer-item{
+    text-align:center;
+}
+
+.footer-item h4{
+    margin:0;
+    font-size:13px;
+}
+
+.footer-item p{
+    margin:2px 0;
+}
+
+.footer-item a{
+    color:#c8a85d;
+    text-decoration:none;
+    margin:0 3px;
+}
+
+.footer-copy{
+    text-align:center;
+    margin-top:5px;
+    font-size:12px;
+    opacity:0.8;
+}
 /* Panel de habitaciones */
 /* ---- DISEÑO ELEGANTE Y MINIMALISTA ---- */
 body {
@@ -1041,3 +1083,5 @@ footer {
 .login-section form button:hover {
     background: #ffb700;
 }
+
+
