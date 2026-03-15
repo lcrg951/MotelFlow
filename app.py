@@ -8,30 +8,30 @@ app.secret_key = 'supersecretkey'  # Cambia esto por una clave segura en producc
 DECORACIONES = [
     {
         'id': 1,
-        'nombre': 'Decoración Romántica',
+        'nombre': 'Decoración basica',
         'descripcion': 'Pétalos de rosa, velas aromáticas y luz tenue.',
-        'precio': 600,
+        'precio': 25000,
         'imagen': 'img/cumpleanos_especial.jpg'
     },
     {
         'id': 2,
-        'nombre': 'Cumpleaños Especial',
-        'descripcion': 'Globos, pastel pequeño y banner personalizado.',
-        'precio': 800,
+        'nombre': 'Decoración Especial',
+        'descripcion': 'Globos, pastel pequeño y banner personalizado en petalos.',
+        'precio': 40000,
         'imagen': 'img/cumpleanos_especial.jpg'
     },
     {
         'id': 3,
         'nombre': 'Decoración Spa',
-        'descripcion': 'Aromaterapia, batas y decoración relajante.',
-        'precio': 700,
+        'descripcion': 'Globos, pastel pequeño, banner personalizado en petalos, velas romanticas, letrero, cojines, florero.',
+        'precio': 50000,
         'imagen': 'img/decoracion_spa.jpg'
     },
     {
         'id': 4,
         'nombre': 'Aniversario',
-        'descripcion': 'Champagne, flores y decoración elegante.',
-        'precio': 1000,
+        'descripcion': 'Champagne, flores y decoración elegante(dejalo en nuestras manos).',
+        'precio': 70000,
         'imagen': 'img/aniversario.jpg'
     }
 ]
@@ -54,14 +54,14 @@ ROOMS = [
     },
     {
         'id': 3,
-        'nombre': 'Habitación Estándar',
+        'nombre': 'Habitación Diamante',
         'descripcion': 'Comodidad y privacidad, habitación de lujo con cama king size, tv de pantalla plana, servicio de habitación, baño privado, camilla y jacuzzi.',
         'precio': 90000,
         'imagen': 'img/diamante.jpeg'
     },
     {
         'id': 4,
-        'nombre': 'Habitación Ejecutiva',
+        'nombre': 'Habitación platino',
         'descripcion': 'Espacio moderno, habitación de lujo con cama king size, tv de pantalla plana, servicio de habitación, baño privado, camilla, jacuzzi, sillon, sonio de alta calidad y sauna a petición',
         'precio': 120000,
         'imagen': 'img/platino.jpeg'
