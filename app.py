@@ -295,17 +295,19 @@ def inventario():
 
 # --- Registro de Ventas ---
 
-# --- Registro de Ventas con usuario de turno ---
+
+# --- Registro de Ventas mejorado ---
+from flask import jsonify
+
+# Carrito de productos por habitación en sesión
 @app.route('/ventas', methods=['GET', 'POST'])
 def ventas():
     conn = get_db_connection()
     cur = conn.cursor()
-    # Obtener datos para el formulario
     cur.execute("SELECT * FROM inventario ORDER BY nombre")
     productos = cur.fetchall()
     cur.execute("SELECT * FROM habitacion ORDER BY numero")
     habitaciones = cur.fetchall()
-    # Obtener usuario del turno abierto
     usuario_id = None
     if 'usuario' in session:
         cur.execute("SELECT id FROM usuario WHERE correo=%s", (session['usuario'],))
@@ -313,22 +315,52 @@ def ventas():
         if u:
             usuario_id = u['id']
     mensaje = None
+    # Carrito de productos por habitación
+    if 'carrito' not in session:
+        session['carrito'] = {}
+    carrito = session['carrito']
     if request.method == 'POST':
-        id_habitacion = request.form['id_habitacion'] or None
-        id_producto = request.form['id_producto']
-        cantidad = int(request.form['cantidad'])
-        # Obtener precio_venta
-        cur.execute("SELECT precio_venta, stock_actual FROM inventario WHERE id = %s", (id_producto,))
-        prod = cur.fetchone()
-        if not prod or prod['stock_actual'] < cantidad or not usuario_id:
-            mensaje = 'Stock insuficiente o usuario no autenticado.'
+        id_habitacion = request.form['id_habitacion']
+        id_producto = request.form.get('id_producto')
+        cantidad = request.form.get('cantidad')
+        accion = request.form.get('accion')
+        if accion == 'agregar_producto' and id_producto and cantidad:
+            # Agregar producto al carrito
+            if id_habitacion not in carrito:
+                carrito[id_habitacion] = []
+            carrito[id_habitacion].append({'id_producto': id_producto, 'cantidad': int(cantidad)})
+            session['carrito'] = carrito
+            mensaje = 'Producto agregado al carrito.'
+        elif accion == 'registrar_venta' and usuario_id:
+            # Registrar venta solo al ocupar
+            productos_hab = carrito.get(id_habitacion, [])
+            total = 0
+            for item in productos_hab:
+                cur.execute("SELECT precio_venta, stock_actual FROM inventario WHERE id = %s", (item['id_producto'],))
+                prod = cur.fetchone()
+                if not prod or prod['stock_actual'] < item['cantidad']:
+                    mensaje = 'Stock insuficiente para algún producto.'
+                    break
+                total += float(prod['precio_venta']) * item['cantidad']
+            # Sumar valor de la habitación
+            cur.execute("SELECT precio_estandar FROM habitacion WHERE id = %s", (id_habitacion,))
+            hab = cur.fetchone()
+            if hab:
+                total += float(hab['precio_estandar'])
+            if not mensaje:
+                for item in productos_hab:
+                    cur.execute("SELECT precio_venta FROM inventario WHERE id = %s", (item['id_producto'],))
+                    prod = cur.fetchone()
+                    total_pago = float(prod['precio_venta']) * item['cantidad']
+                    cur.execute("INSERT INTO venta (id_usuario, id_habitacion, id_producto, cantidad, total_pago) VALUES (%s, %s, %s, %s, %s)",
+                        (usuario_id, id_habitacion, item['id_producto'], item['cantidad'], total_pago))
+                    cur.execute("UPDATE inventario SET stock_actual = stock_actual - %s WHERE id = %s", (item['cantidad'], item['id_producto']))
+                conn.commit()
+                mensaje = f'Venta registrada. Total: ${total}'
+                carrito.pop(id_habitacion, None)
+                session['carrito'] = carrito
         else:
-            total_pago = float(prod['precio_venta']) * cantidad
-            cur.execute("INSERT INTO venta (id_usuario, id_habitacion, id_producto, cantidad, total_pago) VALUES (%s, %s, %s, %s, %s)",
-                (usuario_id, id_habitacion, id_producto, cantidad, total_pago))
-            cur.execute("UPDATE inventario SET stock_actual = stock_actual - %s WHERE id = %s", (cantidad, id_producto))
-            conn.commit()
-            mensaje = 'Venta registrada correctamente.'
+            mensaje = 'Acción no válida o datos incompletos.'
     # Mostrar ventas
     cur.execute("""
         SELECT v.*, u.nombres as usuario, h.numero as habitacion, i.nombre as producto
@@ -341,7 +373,7 @@ def ventas():
     ventas = cur.fetchall()
     cur.close()
     conn.close()
-    return render_template('ventas.html', productos=productos, habitaciones=habitaciones, ventas=ventas, mensaje=mensaje)
+    return render_template('ventas.html', productos=productos, habitaciones=habitaciones, ventas=ventas, mensaje=mensaje, carrito=carrito)
 
 @app.route('/nomina')
 def nomina():
@@ -362,6 +394,56 @@ def api_habitacion_estado(hab_id):
     cur.close()
     conn.close()
     return jsonify({'ok': True})
+
+
+# --- PANEL: Crear usuario ---
+@app.route('/usuarios', methods=['GET', 'POST'])
+def usuarios():
+    conn = get_db_connection()
+    cur = conn.cursor()
+    mensaje = None
+    if request.method == 'POST':
+        id_usuario = request.form.get('id_usuario')
+        nombres = request.form.get('nombres')
+        correo = request.form.get('correo')
+        contrasena = request.form.get('contrasena')
+        rol = request.form.get('rol')
+        if id_usuario:  # Actualizar
+            cur.execute("UPDATE usuario SET nombres=%s, correo=%s, contrasena=%s, rol=%s WHERE id=%s", (nombres, correo, contrasena, rol, id_usuario))
+            mensaje = 'Usuario actualizado.'
+        else:  # Crear
+            cur.execute("INSERT INTO usuario (nombres, correo, contrasena, rol) VALUES (%s, %s, %s, %s)", (nombres, correo, contrasena, rol))
+            mensaje = 'Usuario creado.'
+        conn.commit()
+    cur.execute("SELECT * FROM usuario ORDER BY id")
+    usuarios = cur.fetchall()
+    cur.close()
+    conn.close()
+    return render_template('usuarios.html', usuarios=usuarios, mensaje=mensaje)
+
+# --- PANEL: Conceder permisos ---
+@app.route('/permisos', methods=['GET', 'POST'])
+def permisos():
+    conn = get_db_connection()
+    cur = conn.cursor()
+    mensaje = None
+    if request.method == 'POST':
+        id_usuario = request.form.get('id_usuario')
+        paneles = request.form.getlist('paneles')
+        cur.execute("UPDATE usuario SET paneles=%s WHERE id=%s", (','.join(paneles), id_usuario))
+        conn.commit()
+        mensaje = 'Permisos actualizados.'
+    cur.execute("SELECT * FROM usuario ORDER BY id")
+    usuarios = cur.fetchall()
+    cur.close()
+    conn.close()
+    paneles = ['habitaciones', 'turnos', 'inventario', 'ventas', 'nomina', 'usuarios', 'permisos', 'aseo']
+    return render_template('permisos.html', usuarios=usuarios, paneles=paneles, mensaje=mensaje)
+
+# --- PANEL: Aseo general (vacío) ---
+@app.route('/aseo')
+def aseo():
+    return render_template('aseo.html')
 
 if __name__ == '__main__':
     app.run(debug=True)

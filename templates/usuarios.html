@@ -1,0 +1,46 @@
+{% extends 'header_alt.html' %}
+{% block content %}
+<div class="panel-central">Gestión de Usuarios</div>
+<main>
+    <div style="padding:32px;max-width:700px;margin:auto;">
+        <h2>Crear / Editar Usuario</h2>
+        <form method="post" style="margin-bottom:18px;">
+            <input type="hidden" name="id_usuario" id="id_usuario">
+            <input type="text" name="nombres" placeholder="Nombres" required>
+            <input type="email" name="correo" placeholder="Correo" required>
+            <input type="password" name="contrasena" placeholder="Contraseña" required>
+            <select name="rol" required>
+                <option value="">Rol</option>
+                <option value="admin">Admin</option>
+                <option value="colaborador">Colaborador</option>
+            </select>
+            <button type="submit">Guardar</button>
+        </form>
+        {% if mensaje %}<div style="color:green;">{{mensaje}}</div>{% endif %}
+        <h3>Usuarios registrados</h3>
+        <table border="1" style="width:100%;margin-top:18px;">
+            <tr><th>ID</th><th>Nombres</th><th>Correo</th><th>Rol</th><th>Acción</th></tr>
+            {% for u in usuarios %}
+            <tr>
+                <td>{{u.id}}</td>
+                <td>{{u.nombres}}</td>
+                <td>{{u.correo}}</td>
+                <td>{{u.rol}}</td>
+                <td>
+                    <button onclick="editarUsuario('{{u.id}}','{{u.nombres}}','{{u.correo}}','{{u.rol}}')">Editar</button>
+                </td>
+            </tr>
+            {% endfor %}
+        </table>
+    </div>
+    <script>
+        function editarUsuario(id, nombres, correo, rol) {
+            document.getElementById('id_usuario').value = id;
+            document.querySelector('input[name=nombres]').value = nombres;
+            document.querySelector('input[name=correo]').value = correo;
+            document.querySelector('input[name=contrasena]').value = '';
+            document.querySelector('select[name=rol]').value = rol;
+        }
+    </script>
+</main>
+{% endblock %}
