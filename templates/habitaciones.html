@@ -26,12 +26,19 @@
         <section class="login-section" style="flex: 1 1 350px; min-width: 320px; max-width: 400px;">
             <h2>Panel de Administrador</h2>
             <p>Bienvenido al panel de administración. Aquí puedes gestionar el motel.</p>
+            <form method="post" style="margin-bottom:18px;">
+                <h3>Agregar Habitación</h3>
+                <input type="text" name="numero" placeholder="Número" required>
+                <input type="text" name="tipo" placeholder="Tipo" required>
+                <input type="number" name="precio_estandar" placeholder="Precio" step="0.01" required>
+                <button type="submit">Agregar</button>
+            </form>
             <div class="panel-habs">
-                {% for i in range(1, 21) %}
-                <div class="hab-cuadro" id="hab{{i}}" onclick="abrirModalEstado({{i}})">
-                    <span>hab{{i}}</span>
-                    <div class="estado-hab" id="estado-hab{{i}}"></div>
-                    <div class="estado-texto" id="estado-texto{{i}}" style="font-size:13px;margin-top:4px;color:#444;"></div>
+                {% for hab in habitaciones %}
+                <div class="hab-cuadro" id="hab{{hab.id}}">
+                    <span>Hab {{hab.numero}}</span>
+                    <div class="estado-hab">{{hab.estado}}</div>
+                    <div class="estado-texto" style="font-size:13px;margin-top:4px;color:#444;">{{hab.tipo}}<br>${{hab.precio_estandar}}</div>
                 </div>
                 {% endfor %}
             </div>

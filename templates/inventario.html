@@ -2,10 +2,29 @@
 {% block content %}
 <div class="panel-central">Gestión de Inventario</div>
 <main>
-    <div style="padding:32px;text-align:center;">
+    <div style="padding:32px;text-align:center;max-width:600px;margin:auto;">
         <h2>Inventario</h2>
-        <p>Aquí podrás ver y gestionar el inventario del motel.</p>
-        <!-- Aquí puedes agregar una tabla o resumen de inventario -->
+        <form method="post" style="margin-bottom:18px;">
+            <h3>Agregar Producto</h3>
+            <input type="text" name="nombre" placeholder="Nombre" required>
+            <input type="number" name="stock_actual" placeholder="Stock" required>
+            <input type="number" name="precio_costo" placeholder="Precio Costo" step="0.01" required>
+            <input type="number" name="precio_venta" placeholder="Precio Venta" step="0.01" required>
+            <input type="number" name="stock_minimo" placeholder="Stock Mínimo" required>
+            <button type="submit">Agregar</button>
+        </form>
+        <table border="1" style="width:100%;margin-top:18px;">
+            <tr><th>Nombre</th><th>Stock</th><th>Precio Costo</th><th>Precio Venta</th><th>Stock Mínimo</th></tr>
+            {% for p in productos %}
+            <tr>
+                <td>{{p.nombre}}</td>
+                <td>{{p.stock_actual}}</td>
+                <td>${{p.precio_costo}}</td>
+                <td>${{p.precio_venta}}</td>
+                <td>{{p.stock_minimo}}</td>
+            </tr>
+            {% endfor %}
+        </table>
     </div>
 </main>
 {% endblock %}

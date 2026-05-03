@@ -2,10 +2,170 @@
 {% block content %}
 <div class="panel-central">Gestión de Ventas</div>
 <main>
-    <div style="padding:32px;text-align:center;">
-        <h2>Ventas</h2>
-        <p>Aquí podrás ver y gestionar las ventas realizadas.</p>
-        <!-- Aquí puedes agregar una tabla o resumen de ventas -->
+    <div style="padding:32px;max-width:1100px;margin:auto;">
+        <h2>Panel de Habitaciones</h2>
+        <div id="habitaciones-grid" style="display:flex;flex-wrap:wrap;gap:18px;justify-content:center;">
+            {% for hab in habitaciones %}
+            <div class="hab-cuadro venta-hab"
+                data-id="{{hab.id}}" data-estado="{{hab.estado}}" data-numero="{{hab.numero}}" data-tipo="{{hab.tipo}}" data-tiempo="{{hab.tiempo}}"
+                style="width:120px;height:120px;display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer;
+                border-radius:12px;font-weight:bold;font-size:1.1rem;
+                background:{% if hab.estado=='Ocupada' %}#ffb3b3{% elif hab.estado=='Sucia' %}#ffe066{% else %}#b3ffb3{% endif %};">
+                <span>Hab {{hab.numero}}</span>
+                <span style="font-size:0.9rem;font-weight:400;">{{hab.tipo}}</span>
+                <span class="venta-timer" id="timer-{{hab.id}}"></span>
+                <span style="font-size:0.9rem;">{{hab.estado}}</span>
+            </div>
+            {% endfor %}
+        </div>
+
+        <!-- Modal de acción -->
+        <div id="modal-accion" class="modal" style="display:none;">
+            <div class="modal-content">
+                <h2>¿Qué deseas hacer con la habitación <span id="modal-hab-num"></span>?</h2>
+                <button onclick="abrirModalHabitacion()">Habitación</button>
+                <button onclick="abrirModalProductos()">Productos</button>
+                <button onclick="cerrarModalAccion()">Cancelar</button>
+            </div>
+        </div>
+        <!-- Modal de estado habitación -->
+        <div id="modal-habitacion" class="modal" style="display:none;">
+            <div class="modal-content">
+                <h2>Cambiar estado habitación</h2>
+                <button onclick="cambiarEstado('Ocupada')">Ocupar</button>
+                <button onclick="cambiarEstado('Sucia')">Liberar</button>
+                <button onclick="cambiarEstado('Libre')">Limpiar</button>
+                <button onclick="cerrarModalHabitacion()">Cancelar</button>
+            </div>
+        </div>
+        <!-- Modal de tiempo (rato/amanecida) -->
+        <div id="modal-tiempo" class="modal" style="display:none;">
+            <div class="modal-content">
+                <h2>Selecciona tiempo de ocupación</h2>
+                <button onclick="setTiempo('rato')">Rato (4h)</button>
+                <button onclick="setTiempo('amanecida')">Amanecida (12h)</button>
+            </div>
+        </div>
+        <!-- Modal de productos -->
+        <div id="modal-productos" class="modal" style="display:none;">
+            <div class="modal-content">
+                <h2>Agregar productos a la venta</h2>
+                <form id="form-producto" method="post">
+                    <input type="hidden" name="id_habitacion" id="form-id-hab">
+                    <select name="id_producto" required>
+                        <option value="">Producto</option>
+                        {% for p in productos %}
+                        <option value="{{p.id}}">{{p.nombre}} (Stock: {{p.stock_actual}})</option>
+                        {% endfor %}
+                    </select>
+                    <input type="number" name="cantidad" placeholder="Cantidad" min="1" required>
+                    <button type="submit">Registrar Venta</button>
+                    <button type="button" onclick="cerrarModalProductos()">Cancelar</button>
+                </form>
+            </div>
+        </div>
+
+        <h3 style="margin-top:40px;">Historial de Ventas</h3>
+        <table border="1" style="width:100%;margin-top:18px;">
+            <tr><th>Fecha</th><th>Empleado</th><th>Habitación</th><th>Producto</th><th>Cantidad</th><th>Total</th></tr>
+            {% for v in ventas %}
+            <tr>
+                <td>{{v.fecha_venta}}</td>
+                <td>{{v.usuario}}</td>
+                <td>{{v.habitacion or '-'}}</td>
+                <td>{{v.producto}}</td>
+                <td>{{v.cantidad}}</td>
+                <td>${{v.total_pago}}</td>
+            </tr>
+            {% endfor %}
+        </table>
     </div>
+    <script>
+        let habSeleccionada = null;
+        let habIdSeleccionada = null;
+        let accion = null;
+        let tiempoSeleccionado = null;
+        let timers = {};
+
+        // Mostrar modal de acción al clickear habitación
+        document.querySelectorAll('.venta-hab').forEach(el => {
+            el.onclick = function() {
+                habSeleccionada = this;
+                habIdSeleccionada = this.dataset.id;
+                document.getElementById('modal-hab-num').textContent = this.dataset.numero;
+                document.getElementById('modal-accion').style.display = 'block';
+            }
+        });
+        function abrirModalHabitacion() {
+            document.getElementById('modal-accion').style.display = 'none';
+            document.getElementById('modal-habitacion').style.display = 'block';
+        }
+        function abrirModalProductos() {
+            document.getElementById('modal-accion').style.display = 'none';
+            document.getElementById('modal-productos').style.display = 'block';
+            document.getElementById('form-id-hab').value = habIdSeleccionada;
+        }
+        function cerrarModalAccion() {
+            document.getElementById('modal-accion').style.display = 'none';
+        }
+        function cerrarModalHabitacion() {
+            document.getElementById('modal-habitacion').style.display = 'none';
+        }
+        function cerrarModalProductos() {
+            document.getElementById('modal-productos').style.display = 'none';
+        }
+        // Cambiar estado habitación
+        function cambiarEstado(estado) {
+            if (estado === 'Ocupada') {
+                document.getElementById('modal-habitacion').style.display = 'none';
+                document.getElementById('modal-tiempo').style.display = 'block';
+            } else {
+                fetch(`/api/habitacion_estado/${habIdSeleccionada}`, {
+                    method: 'POST',
+                    headers: {'Content-Type':'application/json'},
+                    body: JSON.stringify({estado: estado})
+                }).then(() => location.reload());
+            }
+        }
+        function setTiempo(tipo) {
+            let horas = tipo === 'rato' ? 4 : 12;
+            fetch(`/api/habitacion_estado/${habIdSeleccionada}`, {
+                method: 'POST',
+                headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({estado: 'Ocupada', tiempo: tipo})
+            }).then(() => location.reload());
+        }
+        // Temporizadores
+        function iniciarTimers() {
+            document.querySelectorAll('.venta-hab').forEach(el => {
+                if (el.dataset.estado === 'Ocupada' && el.dataset.tiempo) {
+                    let id = el.dataset.id;
+                    let tipo = el.dataset.tiempo;
+                    let horas = tipo === 'rato' ? 4 : 12;
+                    let key = 'timer_hab_'+id;
+                    let start = localStorage.getItem(key);
+                    if (!start) {
+                        localStorage.setItem(key, Date.now());
+                        start = Date.now();
+                    }
+                    timers[id] = setInterval(() => {
+                        let trans = Math.floor((Date.now() - start)/1000);
+                        let restante = horas*3600 - trans;
+                        let timerEl = document.getElementById('timer-'+id);
+                        if (restante > 0) {
+                            let h = Math.floor(restante/3600);
+                            let m = Math.floor((restante%3600)/60);
+                            let s = restante%60;
+                            timerEl.textContent = `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+                        } else {
+                            timerEl.textContent = '¡Tiempo!';
+                            clearInterval(timers[id]);
+                        }
+                    }, 1000);
+                }
+            });
+        }
+        window.onload = iniciarTimers;
+    </script>
 </main>
 {% endblock %}

@@ -1,3 +1,5 @@
+# API para cambiar estado y tiempo de habitación
+from flask import jsonify
 # --- RUTAS DE TURNOS (deben ir después de la definición de app) ---
 from flask import jsonify
 import psycopg2
@@ -162,9 +164,24 @@ def empleados():
     return render_template('empleados.html')
 
 # Ruta para panel de habitaciones
-@app.route('/habitaciones')
+
+# --- CRUD Habitaciones ---
+@app.route('/habitaciones', methods=['GET', 'POST'])
 def habitaciones():
-    return render_template('habitaciones.html', rooms=ROOMS)
+    conn = get_db_connection()
+    cur = conn.cursor()
+    if request.method == 'POST':
+        # Registrar nueva habitación
+        numero = request.form['numero']
+        tipo = request.form['tipo']
+        precio = request.form['precio_estandar']
+        cur.execute("INSERT INTO habitacion (numero, tipo, precio_estandar) VALUES (%s, %s, %s)", (numero, tipo, precio))
+        conn.commit()
+    cur.execute("SELECT * FROM habitacion ORDER BY id")
+    habitaciones = cur.fetchall()
+    cur.close()
+    conn.close()
+    return render_template('habitaciones.html', habitaciones=habitaciones)
 
 
 @app.route('/admin', methods=['GET', 'POST'])
@@ -254,17 +271,97 @@ def turnos():
     conn.close()
     return render_template('turnos.html', turnos=todos_los_turnos, ultimo=ultimo_turno)
 
-@app.route('/inventario')
-def inventario():
-    return render_template('inventario.html')
 
-@app.route('/ventas')
+# --- CRUD Inventario ---
+@app.route('/inventario', methods=['GET', 'POST'])
+def inventario():
+    conn = get_db_connection()
+    cur = conn.cursor()
+    if request.method == 'POST':
+        nombre = request.form['nombre']
+        stock_actual = request.form['stock_actual']
+        precio_costo = request.form['precio_costo']
+        precio_venta = request.form['precio_venta']
+        stock_minimo = request.form['stock_minimo']
+        cur.execute("INSERT INTO inventario (nombre, stock_actual, precio_costo, precio_venta, stock_minimo) VALUES (%s, %s, %s, %s, %s)",
+            (nombre, stock_actual, precio_costo, precio_venta, stock_minimo))
+        conn.commit()
+    cur.execute("SELECT * FROM inventario ORDER BY id")
+    productos = cur.fetchall()
+    cur.close()
+    conn.close()
+    return render_template('inventario.html', productos=productos)
+
+
+# --- Registro de Ventas ---
+
+# --- Registro de Ventas con usuario de turno ---
+@app.route('/ventas', methods=['GET', 'POST'])
 def ventas():
-    return render_template('ventas.html')
+    conn = get_db_connection()
+    cur = conn.cursor()
+    # Obtener datos para el formulario
+    cur.execute("SELECT * FROM inventario ORDER BY nombre")
+    productos = cur.fetchall()
+    cur.execute("SELECT * FROM habitacion ORDER BY numero")
+    habitaciones = cur.fetchall()
+    # Obtener usuario del turno abierto
+    usuario_id = None
+    if 'usuario' in session:
+        cur.execute("SELECT id FROM usuario WHERE correo=%s", (session['usuario'],))
+        u = cur.fetchone()
+        if u:
+            usuario_id = u['id']
+    mensaje = None
+    if request.method == 'POST':
+        id_habitacion = request.form['id_habitacion'] or None
+        id_producto = request.form['id_producto']
+        cantidad = int(request.form['cantidad'])
+        # Obtener precio_venta
+        cur.execute("SELECT precio_venta, stock_actual FROM inventario WHERE id = %s", (id_producto,))
+        prod = cur.fetchone()
+        if not prod or prod['stock_actual'] < cantidad or not usuario_id:
+            mensaje = 'Stock insuficiente o usuario no autenticado.'
+        else:
+            total_pago = float(prod['precio_venta']) * cantidad
+            cur.execute("INSERT INTO venta (id_usuario, id_habitacion, id_producto, cantidad, total_pago) VALUES (%s, %s, %s, %s, %s)",
+                (usuario_id, id_habitacion, id_producto, cantidad, total_pago))
+            cur.execute("UPDATE inventario SET stock_actual = stock_actual - %s WHERE id = %s", (cantidad, id_producto))
+            conn.commit()
+            mensaje = 'Venta registrada correctamente.'
+    # Mostrar ventas
+    cur.execute("""
+        SELECT v.*, u.nombres as usuario, h.numero as habitacion, i.nombre as producto
+        FROM venta v
+        JOIN usuario u ON v.id_usuario = u.id
+        LEFT JOIN habitacion h ON v.id_habitacion = h.id
+        JOIN inventario i ON v.id_producto = i.id
+        ORDER BY v.fecha_venta DESC
+    """)
+    ventas = cur.fetchall()
+    cur.close()
+    conn.close()
+    return render_template('ventas.html', productos=productos, habitaciones=habitaciones, ventas=ventas, mensaje=mensaje)
 
 @app.route('/nomina')
 def nomina():
     return render_template('nomina.html')
+
+@app.route('/api/habitacion_estado/<int:hab_id>', methods=['POST'])
+def api_habitacion_estado(hab_id):
+    data = request.get_json()
+    estado = data.get('estado')
+    tiempo = data.get('tiempo')
+    conn = get_db_connection()
+    cur = conn.cursor()
+    if tiempo:
+        cur.execute("UPDATE habitacion SET estado=%s, tiempo=%s WHERE id=%s", (estado, tiempo, hab_id))
+    else:
+        cur.execute("UPDATE habitacion SET estado=%s, tiempo=NULL WHERE id=%s", (estado, hab_id))
+    conn.commit()
+    cur.close()
+    conn.close()
+    return jsonify({'ok': True})
 
 if __name__ == '__main__':
     app.run(debug=True)
