@@ -5,46 +5,21 @@
 </div>
 <section class="login-section">
     <h2>Iniciar Sesión</h2>
-    <form id="login-form">
-        <label for="usuario">Usuario:</label>
+    {% with messages = get_flashed_messages() %}
+      {% if messages %}
+        <ul class="flashes">
+        {% for message in messages %}
+          <li style="color:red;">{{ message }}</li>
+        {% endfor %}
+        </ul>
+      {% endif %}
+    {% endwith %}
+    <form id="login-form" method="post" action="/login">
+        <label for="usuario">Usuario (correo):</label>
         <input type="text" id="usuario" name="usuario" required>
         <label for="contrasena">Contraseña:</label>
         <input type="password" id="contrasena" name="contrasena" required>
-        <button type="button" onclick="abrirModalAcceso()">Entrar</button>
+        <button type="submit">Entrar</button>
     </form>
-    <div id="modal-acceso" class="modal" style="display:none;">
-        <div class="modal-content">
-            <h2>¿Desea acceder como?</h2>
-            <button class="reservar-btn" style="margin:10px 0;" onclick="redirigirAcceso('empleados')">Empleado</button>
-            <button class="reservar-btn" style="margin:10px 0;" onclick="redirigirAcceso('admin')">Administrador</button>
-        </div>
-    </div>
-    <script>
-        function abrirModalAcceso() {
-            document.getElementById('modal-acceso').style.display = 'block';
-        }
-        function redirigirAcceso(tipo) {
-            var form = document.getElementById('login-form');
-            var usuario = form.usuario.value;
-            var contrasena = form.contrasena.value;
-            if (!usuario || !contrasena) {
-                alert('Por favor, complete usuario y contraseña.');
-                return;
-            }
-            if (tipo === 'empleados') {
-                form.action = '/empleados';
-            } else {
-                form.action = '/admin';
-            }
-            form.method = 'post';
-            form.submit();
-        }
-        window.onclick = function(event) {
-            var modal = document.getElementById('modal-acceso');
-            if (event.target == modal) {
-                modal.style.display = 'none';
-            }
-        }
-    </script>
 </section>
 {% endblock %}
