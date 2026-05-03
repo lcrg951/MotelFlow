@@ -1,0 +1,69 @@
+{% extends 'header_alt.html' %}
+{% block content %}
+<div class="panel-central">
+    Panel de Administración <span style="font-size:1.1rem;font-weight:400;color:#444;margin-left:8px;">Accede a los módulos de gestión.</span>
+</div>
+<main>
+    <div class="admin-apps-grid" style="display: flex; flex-wrap: wrap; gap: 32px; justify-content: center; margin-top: 32px;">
+        <a href="/habitaciones" class="admin-app-card">
+            <div class="admin-app-icon" style="background:#6c63ff;"><span class="material-icons">meeting_room</span></div>
+            <div class="admin-app-title">Habitaciones</div>
+        </a>
+        <a href="/turnos" class="admin-app-card">
+            <div class="admin-app-icon" style="background:#ffb347;"><span class="material-icons">access_time</span></div>
+            <div class="admin-app-title">Turnos</div>
+        </a>
+        <a href="/inventario" class="admin-app-card">
+            <div class="admin-app-icon" style="background:#4caf50;"><span class="material-icons">inventory_2</span></div>
+            <div class="admin-app-title">Inventario</div>
+        </a>
+        <a href="/ventas" class="admin-app-card">
+            <div class="admin-app-icon" style="background:#f44336;"><span class="material-icons">point_of_sale</span></div>
+            <div class="admin-app-title">Ventas</div>
+        </a>
+        <a href="/nomina" class="admin-app-card">
+            <div class="admin-app-icon" style="background:#00bcd4;"><span class="material-icons">people</span></div>
+            <div class="admin-app-title">Nómina</div>
+        </a>
+    </div>
+</main>
+<style>
+.admin-apps-grid a.admin-app-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    width: 160px;
+    height: 160px;
+    background: #fff;
+    border-radius: 18px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    text-decoration: none;
+    color: #222;
+    transition: box-shadow .2s, transform .2s;
+    margin-bottom: 16px;
+}
+.admin-apps-grid a.admin-app-card:hover {
+    box-shadow: 0 4px 16px rgba(0,0,0,0.16);
+    transform: translateY(-4px) scale(1.04);
+}
+.admin-app-icon {
+    width: 56px;
+    height: 56px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 14px;
+    color: #fff;
+    font-size: 32px;
+}
+.admin-app-title {
+    font-size: 1.1rem;
+    font-weight: 500;
+    text-align: center;
+}
+</style>
+<!-- Material Icons CDN -->
+<link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+{% endblock %}

@@ -19,12 +19,22 @@
                 </div>
                 {% endfor %}
             </div>
+            <!-- Botón para cerrar sesión/turno -->
+            <button id="btn-salir" class="reservar-btn" style="margin-top:18px;">Salir</button>
         </section>
         <section class="panel-extra" style="flex: 1 1 350px; min-width: 320px; max-width: 400px; background: #fffbe6; border-radius: 18px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); padding: 24px; margin-top: 32px; align-self: flex-start;">
             <h2 style="text-align:center;">Habitaciones en servicio</h2>
             <div id="resumen-habs"></div>
             <div id="resumen-total" style="margin-top:18px;font-weight:bold;font-size:18px;text-align:center;"></div>
         </section>
+    </div>
+    <!-- Modal para base de caja al abrir turno -->
+    <div id="modal-base-caja" class="modal" style="display:none;">
+        <div class="modal-content">
+            <h2>¿Con cuánto dinero recibes el turno?</h2>
+            <input type="number" id="input-base-caja" min="0" step="0.01" placeholder="Monto inicial" style="width:80%;padding:8px;">
+            <button class="reservar-btn" onclick="enviarBaseCaja()">Aceptar</button>
+        </div>
     </div>
     <div id="modal-estado" class="modal" style="display:none;">
         <div class="modal-content">
@@ -44,6 +54,54 @@
         </div>
     </div>
     <script>
+        // Mostrar modal de base_caja al cargar si no hay turno abierto
+        document.addEventListener('DOMContentLoaded', function() {
+            if (!localStorage.getItem('turno_abierto')) {
+                document.getElementById('modal-base-caja').style.display = 'block';
+            }
+        });
+
+        function enviarBaseCaja() {
+            var monto = document.getElementById('input-base-caja').value;
+            if (!monto || parseFloat(monto) < 0) {
+                alert('Ingrese un monto válido.');
+                return;
+            }
+            fetch('/abrir_turno', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({base_caja: monto})
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.ok) {
+                    localStorage.setItem('turno_abierto', '1');
+                    document.getElementById('modal-base-caja').style.display = 'none';
+                    document.getElementById('turno-info').style.display = 'block';
+                    document.getElementById('fecha-hora').textContent = data.fecha_apertura;
+                } else {
+                    alert(data.msg || 'Error al abrir turno');
+                }
+            });
+        }
+
+        // Botón salir: cerrar turno y sesión
+        document.addEventListener('DOMContentLoaded', function() {
+            document.getElementById('btn-salir').onclick = function() {
+                if (confirm('¿Seguro que deseas salir y cerrar el turno?')) {
+                    fetch('/cerrar_turno', {method: 'POST'})
+                    .then(r => r.json())
+                    .then(data => {
+                        if (data.ok) {
+                            localStorage.removeItem('turno_abierto');
+                            window.location.href = '/login';
+                        } else {
+                            alert(data.msg || 'Error al cerrar turno');
+                        }
+                    });
+                }
+            };
+        });
         let habSeleccionada = null;
         let intervalos = {};
         function abrirModalEstado(num) {

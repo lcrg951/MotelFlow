@@ -1,0 +1,61 @@
+{% extends 'header_alt.html' %}
+{% block content %}
+<div class="panel-central">Gestión de Turnos</div>
+<main>
+    <div style="padding:32px;">
+        <h2>Último Turno Registrado</h2>
+        {% if ultimo %}
+        <table border="1" style="width:100%; border-collapse: collapse; margin-bottom: 30px; background-color: #f9f9f9;">
+            <thead>
+                <tr style="background-color: #e0e0e0;">
+                    <th>ID</th>
+                    <th>Documento Usuario</th>
+                    <th>Apertura</th>
+                    <th>Base Caja</th>
+                    <th>Estado</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>{{ ultimo.id }}</td>
+                    <td>{{ ultimo.nombre_usuario }}</td> <!-- Aquí podrías mostrar el nombre si usas la relación -->
+                    <td>{{ ultimo.fecha_apertura.strftime('%Y-%m-%d %H:%M') }}</td>
+                    <td>${{ ultimo.base_caja }}</td>
+                    <td><strong>{{ ultimo.estado }}</strong></td>
+                </tr>
+            </tbody>
+        </table>
+        {% else %}
+        <p>No hay turnos registrados actualmente.</p>
+        {% endif %}
+
+        <hr>
+
+        <h2>Historial de Turnos</h2>
+        <table border="1" style="width:100%; border-collapse: collapse;">
+            <thead>
+                <tr style="background-color: #f2f2f2;">
+                    <th>ID</th>
+                    <th>Usuario</th>
+                    <th>Apertura</th>
+                    <th>Cierre</th>
+                    <th>Recaudo</th>
+                    <th>Estado</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for turno in turnos %}
+                <tr>
+                    <td>{{ turno.id }}</td>
+                    <td>{{ turno.id_usuario }}</td>
+                    <td>{{ turno.fecha_apertura.strftime('%d/%m/%Y %H:%M') }}</td>
+                    <td>{{ turno.fecha_cierre.strftime('%H:%M') if turno.fecha_cierre else 'Sigue abierto' }}</td>
+                    <td>${{ turno.recaudo_total }}</td>
+                    <td>{{ turno.estado }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</main>
+{% endblock %}
