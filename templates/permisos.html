@@ -1,0 +1,23 @@
+{% extends 'header_alt.html' %}
+{% block content %}
+<div class="panel-central">Conceder Permisos</div>
+<main>
+    <div style="padding:32px;max-width:700px;margin:auto;">
+        <h2>Permisos por usuario</h2>
+        <form method="post" style="margin-bottom:18px;">
+            <select name="id_usuario" required>
+                <option value="">Seleccione usuario</option>
+                {% for u in usuarios %}
+                <option value="{{u.id}}">{{u.nombres}} ({{u.correo}})</option>
+                {% endfor %}
+            </select>
+            <label>Paneles:</label>
+            {% for p in paneles %}
+            <label><input type="checkbox" name="paneles" value="{{p}}"> {{p|capitalize}}</label>
+            {% endfor %}
+            <button type="submit">Guardar permisos</button>
+        </form>
+        {% if mensaje %}<div style="color:green;">{{mensaje}}</div>{% endif %}
+    </div>
+</main>
+{% endblock %}
