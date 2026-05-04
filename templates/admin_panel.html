@@ -1,4 +1,4 @@
-{% extends 'header_colaborador.html' %}
+{% extends 'header_admin.html' %}
 {% block content %}
 <div class="panel-central">
     Panel de Administración <span style="font-size:1.1rem;font-weight:400;color:#444;margin-left:8px;">Accede a los módulos de gestión.</span>
@@ -94,61 +94,4 @@
 </style>
 <!-- Material Icons CDN -->
 <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
-
-<!-- Modal de turno abierto para colaborador -->
-{% if es_colaborador and turno_abierto %}
-<div id="turno-info" style="position:fixed; top:24px; left:24px; background:#fffbe6; color:#2d2d2d; border-radius:10px; padding:12px 22px; box-shadow:0 2px 8px rgba(0,0,0,0.10); font-weight:bold; z-index:1000;">
-    Turno abierto: <span id="fecha-hora">{{ fecha_apertura }}</span>
-</div>
-{% endif %}
-
-<!-- Modal para base de caja al abrir turno (solo colaborador sin turno) -->
-{% if es_colaborador and not turno_abierto %}
-<div id="modal-base-caja" class="modal" style="display:flex;position:fixed;top:0;left:0;width:100vw;height:100vh;background:rgba(0,0,0,.55);z-index:9999;justify-content:center;align-items:center;">
-    <div class="modal-content" style="background:#fff;padding:24px;border-radius:18px;max-width:520px;width:90%;box-shadow:0 10px 30px rgba(0,0,0,.2);">
-        <h2 style="margin-top:0;">¿Con cuánto dinero recibes el turno?</h2>
-        <input type="number" id="input-base-caja" min="0" step="0.01" placeholder="Monto inicial" style="width:100%;padding:12px;border:1px solid #ddd;border-radius:10px;margin-bottom:16px;">
-        <button class="reservar-btn" onclick="enviarBaseCaja()" style="width:100%;padding:12px;background:#4caf50;color:#fff;border:none;border-radius:10px;cursor:pointer;font-weight:bold;">Aceptar</button>
-    </div>
-</div>
-{% endif %}
-
-<script>
-    const esColaborador = {{ es_colaborador|tojson }};
-    const turnoAbierto = {{ turno_abierto|tojson }};
-
-    function enviarBaseCaja() {
-        var monto = document.getElementById('input-base-caja').value;
-        if (!monto || parseFloat(monto) < 0) {
-            alert('Ingrese un monto válido.');
-            return;
-        }
-        fetch('/abrir_turno', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({base_caja: monto})
-        })
-        .then(r => r.json())
-        .then(data => {
-            if (data.ok) {
-                document.getElementById('modal-base-caja').style.display = 'none';
-                let turnoInfo = document.getElementById('turno-info');
-                if (turnoInfo) {
-                    turnoInfo.style.display = 'block';
-                    document.getElementById('fecha-hora').textContent = data.fecha_apertura;
-                } else {
-                    // Crear el elemento si no existe
-                    let div = document.createElement('div');
-                    div.id = 'turno-info';
-                    div.style.cssText = 'position:fixed; top:24px; left:24px; background:#fffbe6; color:#2d2d2d; border-radius:10px; padding:12px 22px; box-shadow:0 2px 8px rgba(0,0,0,0.10); font-weight:bold; z-index:1000;';
-                    div.innerHTML = 'Turno abierto: <span id="fecha-hora">' + data.fecha_apertura + '</span>';
-                    document.body.appendChild(div);
-                }
-            } else {
-                alert(data.msg || 'Error al abrir turno');
-            }
-        });
-    }
-</script>
-
 {% endblock %}
