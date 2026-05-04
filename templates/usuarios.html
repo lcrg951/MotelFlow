@@ -4,9 +4,12 @@
 <main>
     <div style="padding:32px;max-width:700px;margin:auto;">
         <h2>Crear / Editar Usuario</h2>
-        <form method="post" style="margin-bottom:18px;">
+        <form method="post" style="margin-bottom:18px;display:grid;grid-template-columns:repeat(2,1fr);gap:12px;">
             <input type="hidden" name="id_usuario" id="id_usuario">
+            <input type="text" name="documento" placeholder="Documento" required>
             <input type="text" name="nombres" placeholder="Nombres" required>
+            <input type="text" name="apellidos" placeholder="Apellidos" required>
+            <input type="text" name="celular" placeholder="Celular">
             <input type="email" name="correo" placeholder="Correo" required>
             <input type="password" name="contrasena" placeholder="Contraseña" required>
             <select name="rol" required>
@@ -14,32 +17,48 @@
                 <option value="admin">Admin</option>
                 <option value="colaborador">Colaborador</option>
             </select>
-            <button type="submit">Guardar</button>
+            <select name="estado">
+                <option value="Activo">Activo</option>
+                <option value="Inactivo">Inactivo</option>
+            </select>
+            <input type="text" name="funcion" placeholder="Función">
+            <button type="submit" style="grid-column:1/3;">Guardar</button>
         </form>
         {% if mensaje %}<div style="color:green;">{{mensaje}}</div>{% endif %}
         <h3>Usuarios registrados</h3>
         <table border="1" style="width:100%;margin-top:18px;">
-            <tr><th>ID</th><th>Nombres</th><th>Correo</th><th>Rol</th><th>Acción</th></tr>
+            <tr><th>ID</th><th>Documento</th><th>Nombres</th><th>Apellidos</th><th>Celular</th><th>Correo</th><th>Rol</th><th>Estado</th><th>Función</th><th>Permisos</th><th>Acción</th></tr>
             {% for u in usuarios %}
             <tr>
                 <td>{{u.id}}</td>
+                <td>{{u.documento}}</td>
                 <td>{{u.nombres}}</td>
+                <td>{{u.apellidos}}</td>
+                <td>{{u.celular}}</td>
                 <td>{{u.correo}}</td>
                 <td>{{u.rol}}</td>
+                <td>{{u.estado}}</td>
+                <td>{{u.funcion}}</td>
+                <td>{{u.permisos}}</td>
                 <td>
-                    <button onclick="editarUsuario('{{u.id}}','{{u.nombres}}','{{u.correo}}','{{u.rol}}')">Editar</button>
+                    <button onclick="editarUsuario('{{u.id}}','{{u.documento}}','{{u.nombres}}','{{u.apellidos}}','{{u.celular}}','{{u.correo}}','{{u.contrasena}}','{{u.rol}}','{{u.estado}}','{{u.funcion}}')">Editar</button>
                 </td>
             </tr>
             {% endfor %}
         </table>
     </div>
     <script>
-        function editarUsuario(id, nombres, correo, rol) {
+        function editarUsuario(id, documento, nombres, apellidos, celular, correo, contrasena, rol, estado, funcion) {
             document.getElementById('id_usuario').value = id;
+            document.querySelector('input[name=documento]').value = documento;
             document.querySelector('input[name=nombres]').value = nombres;
+            document.querySelector('input[name=apellidos]').value = apellidos;
+            document.querySelector('input[name=celular]').value = celular;
             document.querySelector('input[name=correo]').value = correo;
             document.querySelector('input[name=contrasena]').value = '';
             document.querySelector('select[name=rol]').value = rol;
+            document.querySelector('select[name=estado]').value = estado;
+            document.querySelector('input[name=funcion]').value = funcion;
         }
     </script>
 </main>
