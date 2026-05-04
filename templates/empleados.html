@@ -1,4 +1,4 @@
-{% extends 'header_alt.html' %}
+{% extends 'header_colaborador.html' %}
 {% block content %}
 <div class="panel-central">
     Panel de Empleados <span style="font-size:1.1rem;font-weight:400;color:#444;margin-left:8px;">Gestiona tus tareas y habitaciones asignadas.</span>
@@ -37,6 +37,18 @@
             <button class="reservar-btn" onclick="enviarBaseCaja()">Aceptar</button>
         </div>
     </div>
+    <!-- Modal para cierre de turno / observaciones -->
+    <div id="modal-observaciones" class="modal" style="display:none;">
+        <div class="modal-content" style="max-width:560px;">
+            <h2>Observaciones de cierre</h2>
+            <p>Escribe aquí las observaciones del turno antes de cerrar:</p>
+            <textarea id="input-observaciones" rows="6" style="width:100%;padding:10px;margin-bottom:16px;resize:vertical;"></textarea>
+            <div style="display:flex;gap:12px;justify-content:flex-end;">
+                <button class="reservar-btn" onclick="cerrarModalObservaciones()" style="background:#999;">Cancelar</button>
+                <button class="reservar-btn" onclick="enviarObservaciones()">Cerrar turno</button>
+            </div>
+        </div>
+    </div>
     <div id="modal-estado" class="modal" style="display:none;">
         <div class="modal-content">
             <h2>Selecciona el estado</h2>
@@ -55,11 +67,21 @@
         </div>
     </div>
     <script>
-        // Mostrar modal de base_caja al cargar si no hay turno abierto
+        const turnoAbierto = {{ turno_abierto|tojson }};
+        const fechaApertura = {{ fecha_apertura|tojson }};
+
         document.addEventListener('DOMContentLoaded', function() {
-            if (!localStorage.getItem('turno_abierto')) {
+            if (turnoAbierto) {
+                document.getElementById('turno-info').style.display = 'block';
+                document.getElementById('fecha-hora').textContent = fechaApertura || 'N/A';
+            } else {
                 document.getElementById('modal-base-caja').style.display = 'block';
             }
+            document.getElementById('btn-salir').onclick = function() {
+                if (confirm('¿Seguro que deseas cerrar el turno?')) {
+                    document.getElementById('modal-observaciones').style.display = 'block';
+                }
+            };
         });
 
         function enviarBaseCaja() {
@@ -76,7 +98,6 @@
             .then(r => r.json())
             .then(data => {
                 if (data.ok) {
-                    localStorage.setItem('turno_abierto', '1');
                     document.getElementById('modal-base-caja').style.display = 'none';
                     document.getElementById('turno-info').style.display = 'block';
                     document.getElementById('fecha-hora').textContent = data.fecha_apertura;
@@ -86,23 +107,26 @@
             });
         }
 
-        // Botón salir: cerrar turno y sesión
-        document.addEventListener('DOMContentLoaded', function() {
-            document.getElementById('btn-salir').onclick = function() {
-                if (confirm('¿Seguro que deseas salir y cerrar el turno?')) {
-                    fetch('/cerrar_turno', {method: 'POST'})
-                    .then(r => r.json())
-                    .then(data => {
-                        if (data.ok) {
-                            localStorage.removeItem('turno_abierto');
-                            window.location.href = '/login';
-                        } else {
-                            alert(data.msg || 'Error al cerrar turno');
-                        }
-                    });
+        function cerrarModalObservaciones() {
+            document.getElementById('modal-observaciones').style.display = 'none';
+        }
+
+        function enviarObservaciones() {
+            const observaciones = document.getElementById('input-observaciones').value;
+            fetch('/cerrar_sesion', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({observaciones: observaciones})
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.ok) {
+                    window.location.href = '/login';
+                } else {
+                    alert(data.msg || 'Error al cerrar turno');
                 }
-            };
-        });
+            });
+        }
         let habSeleccionada = null;
         let intervalos = {};
         function abrirModalEstado(num) {

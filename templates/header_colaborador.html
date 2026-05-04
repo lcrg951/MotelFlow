@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Motel Flow{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <header class="main-header-alt">
+        <div class="header-fachada-img-alt" style="height:320px;max-height:320px;width:100vw;overflow:hidden;background-image:url('{{ url_for('static', filename='img/fachada.jpeg') }}');background-size:cover;background-position:center;border-bottom-left-radius:60px;border-bottom-right-radius:60px;"></div>
+        <div class="header-bar">
+            <div class="logo">
+                <h1>Motel Flow</h1>
+                <div class="subtitle">El secreto del confort</div>
+            </div>
+            <nav class="nav-menu">
+                {% if session.get('usuario') %}
+                    {% if permisos %}
+                        <a href="/panel_admin" class="login-btn-header" style="background:#4caf50;color:#fff;padding:10px 18px;border-radius:30px;text-decoration:none;margin-right:10px;">Panel</a>
+                    {% endif %}
+                    <span style="color:#444;font-weight:600;margin-right:16px;">{{ session['usuario'] }}</span>
+                    <a href="#" onclick="abrirModalCerrarSesion(event)" class="login-btn-header" style="background:#f44336;color:#fff;padding:10px 18px;border-radius:30px;text-decoration:none;">Salir</a>
+                {% else %}
+                    <a href="/login" class="login-btn-header">Login</a>
+                {% endif %}
+            </nav>
+        </div>
+    </header>
+    <main>
+        {% block content %}{% endblock %}
+        <br><br><br><br>
+    </main>
+    <br><br><br>
+    <footer>
+        <div class="contenedor-footer">
+            <div class="footer-item">
+                <h4>Contacto</h4>
+                <a href="tel:+573118170579">+57 311 817 0579</a>
+            </div>
+            <div class="footer-item">
+                <h4>Correo</h4>
+                <a href="mailto:SanAndresSuite@gmail.com">SanAndresSuite@gmail.com</a>
+            </div>
+            <div class="footer-item">
+                <h4>Ubicación</h4>
+                <p>Villa de San Diego de Ubaté</p>
+                <p>250430</p>
+            </div>
+            <div class="footer-item">
+                <h4>Redes</h4>
+                <a href="">Facebook</a>
+                <a href="">Instagram</a>
+                <a href="">TikTok</a>
+            </div>
+        </div>
+        <div class="footer-copy">
+            © 2026 Motel Flow · Apartahotel San Andrés
+        </div>
+    </footer>
+    <div id="modal-cerrar-sesion" class="modal" style="display:none;position:fixed;top:0;left:0;width:100vw;height:100vh;background:rgba(0,0,0,.55);z-index:9999;justify-content:center;align-items:center;">
+        <div class="modal-content" style="background:#fff;padding:24px;border-radius:18px;max-width:520px;width:90%;box-shadow:0 10px 30px rgba(0,0,0,.2);">
+            <h2 style="margin-top:0;">Cerrar turno</h2>
+            <p>¿Deseas cerrar el turno? Escribe alguna observación si lo deseas.</p>
+            <textarea id="observaciones-cierre" rows="5" style="width:100%;padding:12px;border:1px solid #ddd;border-radius:10px;margin-top:12px;"></textarea>
+            <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:18px;">
+                <button onclick="cerrarModalCerrarSesion()" style="background:#999;color:#fff;border:none;padding:10px 18px;border-radius:10px;cursor:pointer;">Cancelar</button>
+                <button onclick="enviarCerrarSesion()" style="background:#f44336;color:#fff;border:none;padding:10px 18px;border-radius:10px;cursor:pointer;">Cerrar turno</button>
+            </div>
+        </div>
+    </div>
+    <script>
+        function abrirModalCerrarSesion(event) {
+            event.preventDefault();
+            if (confirm('¿Seguro que deseas cerrar el turno?')) {
+                document.getElementById('modal-cerrar-sesion').style.display = 'flex';
+            }
+        }
+        function cerrarModalCerrarSesion() {
+            document.getElementById('modal-cerrar-sesion').style.display = 'none';
+        }
+        function enviarCerrarSesion() {
+            const observaciones = document.getElementById('observaciones-cierre').value;
+            fetch('/cerrar_sesion', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({observaciones: observaciones})
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.ok) {
+                    window.location.href = '/login';
+                } else {
+                    alert(data.msg || 'Error al cerrar turno.');
+                }
+            });
+        }
+    </script>
+</body>
+</html>

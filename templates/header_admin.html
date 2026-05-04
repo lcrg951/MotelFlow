@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Motel Flow{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <header class="main-header-alt">
+        <div class="header-fachada-img-alt" style="height:320px;max-height:320px;width:100vw;overflow:hidden;background-image:url('{{ url_for('static', filename='img/fachada.jpeg') }}');background-size:cover;background-position:center;border-bottom-left-radius:60px;border-bottom-right-radius:60px;"></div>
+        <div class="header-bar">
+            <div class="logo">
+                <h1>Motel Flow</h1>
+                <div class="subtitle">El secreto del confort</div>
+            </div>
+            <nav class="nav-menu">
+                <a href="/">Inicio</a>
+                {% if session.get('usuario') %}
+                    <span style="color:#444;font-weight:600;margin-right:16px;">{{ session['usuario'] }}</span>
+                    <a href="/logout" class="login-btn-header" style="background:#f44336;color:#fff;padding:10px 18px;border-radius:30px;text-decoration:none;">Cerrar sesión</a>
+                {% else %}
+                    <a href="/login" class="login-btn-header">Login</a>
+                {% endif %}
+            </nav>
+        </div>
+    </header>
+    <main>
+        {% block content %}{% endblock %}
+        <br><br><br><br>
+    </main>
+    <br><br><br>
+    <footer>
+        <div class="contenedor-footer">
+            <div class="footer-item">
+                <h4>Contacto</h4>
+                <a href="tel:+573118170579">+57 311 817 0579</a>
+            </div>
+            <div class="footer-item">
+                <h4>Correo</h4>
+                <a href="mailto:SanAndresSuite@gmail.com">SanAndresSuite@gmail.com</a>
+            </div>
+            <div class="footer-item">
+                <h4>Ubicación</h4>
+                <p>Villa de San Diego de Ubaté</p>
+                <p>250430</p>
+            </div>
+            <div class="footer-item">
+                <h4>Redes</h4>
+                <a href="">Facebook</a>
+                <a href="">Instagram</a>
+                <a href="">TikTok</a>
+            </div>
+        </div>
+        <div class="footer-copy">
+            © 2026 Motel Flow · Apartahotel San Andrés
+        </div>
+    </footer>
+</body>
+</html>

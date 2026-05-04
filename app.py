@@ -35,6 +35,43 @@ def obtener_usuario_por_correo(correo):
     conn.close()
     return usuario
 
+# Función para obtener los permisos del usuario actual
+def obtener_permisos_usuario():
+    if 'usuario' not in session:
+        return []
+    usuario = obtener_usuario_por_correo(session['usuario'])
+    if not usuario:
+        return []
+    if usuario['rol'].lower() == 'admin':
+        return ['habitaciones', 'turnos', 'inventario', 'ventas', 'nomina', 'usuarios', 'permisos', 'aseo']
+    else:
+        # Colaborador: obtener permisos asignados
+        if usuario.get('permisos'):
+            return [p.strip() for p in usuario['permisos'].split(',') if p.strip()]
+        return []
+
+# Función para validar si el usuario tiene permiso para un panel
+def tiene_permiso(panel_requerido):
+    permisos = obtener_permisos_usuario()
+    return panel_requerido in permisos
+
+# Función para redirigir si no tiene permiso
+def validar_acceso(panel_requerido):
+    if not tiene_permiso(panel_requerido):
+        flash('No tienes permisos para acceder a este módulo.')
+        return redirect(url_for('panel_admin'))
+    return None
+
+# Función para obtener el turno abierto de un usuario
+def obtener_turno_abierto_usuario(usuario_id):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM turno WHERE id_usuario = %s AND estado IN ('Abierto', 'abierto') ORDER BY id DESC LIMIT 1", (usuario_id,))
+    turno = cur.fetchone()
+    cur.close()
+    conn.close()
+    return turno
+
 DECORACIONES = [
     {
         'id': 1,
@@ -135,13 +172,8 @@ def login():
         if usuario and usuario['contrasena'] == contrasena:
             session['usuario'] = usuario['correo']
             session['rol'] = usuario['rol']
-            if usuario['rol'].lower() == 'colaborador':
-                return redirect(url_for('empleados'))
-            elif usuario['rol'].lower() == 'admin':
-                return redirect(url_for('admin'))
-            else:
-                flash('Rol no autorizado.')
-                return redirect(url_for('login'))
+            # Ambos Admin y Colaborador van a /admin que redirige a /panel_admin
+            return redirect(url_for('admin'))
         else:
             flash('Usuario o contraseña incorrectos.')
             return redirect(url_for('login'))
@@ -159,15 +191,48 @@ def eliminar(idx):
 
 
 # Ruta para empleados
-@app.route('/empleados', methods=['GET', 'POST'])
+@app.route('/empleados', methods=['GET'])
 def empleados():
-    return render_template('empleados.html')
+    if 'usuario' not in session:
+        return redirect(url_for('login'))
+    usuario = obtener_usuario_por_correo(session['usuario'])
+    if not usuario or usuario['rol'].lower() != 'colaborador':
+        flash('Acceso restringido.')
+        return redirect(url_for('login'))
+
+    turno_abierto = False
+    fecha_apertura = None
+    # Si ya existe un turno abierto en sesión, verificar en la BD.
+    if 'turno_id' in session:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM turno WHERE id = %s AND estado IN ('Abierto', 'abierto')", (session['turno_id'],))
+        turno = cur.fetchone()
+        cur.close()
+        conn.close()
+        if turno:
+            turno_abierto = True
+            fecha_apertura = turno['fecha_apertura']
+    if not turno_abierto:
+        turno = obtener_turno_abierto_usuario(usuario['id'])
+        if turno:
+            session['turno_id'] = turno['id']
+            turno_abierto = True
+            fecha_apertura = turno['fecha_apertura']
+
+    permisos = obtener_permisos_usuario()
+    return render_template('empleados.html', turno_abierto=turno_abierto, fecha_apertura=fecha_apertura, permisos=permisos)
 
 # Ruta para panel de habitaciones
 
 # --- CRUD Habitaciones ---
 @app.route('/habitaciones', methods=['GET', 'POST'])
 def habitaciones():
+    # Validar acceso
+    acceso_negado = validar_acceso('habitaciones')
+    if acceso_negado:
+        return acceso_negado
+    
     conn = get_db_connection()
     cur = conn.cursor()
     if request.method == 'POST':
@@ -198,14 +263,14 @@ def abrir_turno():
     if not usuario:
         return jsonify({'ok': False, 'msg': 'Usuario no encontrado'}), 404
     base_caja = request.json.get('base_caja')
-    if base_caja is None:
+    if base_caja is None or str(base_caja).strip() == '':
         return jsonify({'ok': False, 'msg': 'Monto requerido'}), 400
     # Insertar turno
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute("""
-        INSERT INTO turno (id_usuario, base_caja)
-        VALUES (%s, %s)
+        INSERT INTO turno (id_usuario, base_caja, estado)
+        VALUES (%s, %s, 'Abierto')
         RETURNING id, fecha_apertura
     """, (usuario['id'], base_caja))
     turno = cur.fetchone()
@@ -235,28 +300,98 @@ def cerrar_turno():
     session.pop('rol', None)
     return jsonify({'ok': True})
 
+# Logout para Admin (sin registrar turno)
+@app.route('/logout', methods=['GET'])
+def logout():
+    session.pop('turno_id', None)
+    session.pop('usuario', None)
+    session.pop('rol', None)
+    flash('Sesión cerrada correctamente.')
+    return redirect(url_for('login'))
+
+# Cerrar sesión (GET desde header_colaborador.html)
+@app.route('/cerrar_sesion', methods=['POST'])
+def cerrar_sesion():
+    if 'usuario' not in session or 'turno_id' not in session:
+        return jsonify({'ok': False, 'msg': 'No autenticado'}), 401
+    turno_id = session['turno_id']
+    datos = request.get_json(silent=True)
+    observaciones = ''
+    if datos:
+        observaciones = datos.get('observaciones', '')
+    else:
+        observaciones = request.form.get('observaciones', '')
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        UPDATE turno SET fecha_cierre = CURRENT_TIMESTAMP, estado = 'Cerrado', observaciones = %s
+        WHERE id = %s
+    """, (observaciones, turno_id))
+    conn.commit()
+    cur.close()
+    conn.close()
+    session.pop('turno_id', None)
+    session.pop('usuario', None)
+    session.pop('rol', None)
+    return jsonify({'ok': True})
+
 # --- RUTAS DE TURNOS (deben ir después de la definición de app) ---
 # (Mover esto después de la definición de app)
 
 # Panel de administración principal
 @app.route('/panel_admin')
 def panel_admin():
-    permisos = []
+    permisos = obtener_permisos_usuario()
+    es_admin = False
+    es_colaborador = False
+    
     if 'usuario' in session:
         usuario = obtener_usuario_por_correo(session['usuario'])
         if usuario:
-            if usuario['rol'].lower() == 'admin':
-                # Admin ve todos los paneles
-                permisos = ['habitaciones','turnos','inventario','ventas','nomina','usuarios','permisos','aseo']
-            else:
-                # Colaborador ve solo los asignados
-                if usuario.get('permisos'):
-                    permisos = [p.strip() for p in usuario['permisos'].split(',') if p.strip()]
-    return render_template('panel_admin.html', permisos=permisos)
+            es_admin = usuario['rol'].lower() == 'admin'
+            es_colaborador = usuario['rol'].lower() == 'colaborador'
+            
+            # Si es Admin, mostrar vista admin_panel.html sin turnos
+            if es_admin:
+                return render_template('admin_panel.html', permisos=permisos)
+            
+            # Si es Colaborador, verificar turno abierto
+            if es_colaborador:
+                turno_abierto = False
+                fecha_apertura = None
+                
+                # Verificar si tiene turno abierto
+                if 'turno_id' in session:
+                    conn = get_db_connection()
+                    cur = conn.cursor()
+                    cur.execute("SELECT * FROM turno WHERE id = %s AND estado IN ('Abierto', 'abierto')", (session['turno_id'],))
+                    turno = cur.fetchone()
+                    cur.close()
+                    conn.close()
+                    if turno:
+                        turno_abierto = True
+                        fecha_apertura = turno['fecha_apertura']
+                
+                if not turno_abierto:
+                    turno = obtener_turno_abierto_usuario(usuario['id'])
+                    if turno:
+                        session['turno_id'] = turno['id']
+                        turno_abierto = True
+                        fecha_apertura = turno['fecha_apertura']
+                
+                return render_template('panel_admin.html', permisos=permisos, turno_abierto=turno_abierto, 
+                                     fecha_apertura=fecha_apertura, es_colaborador=es_colaborador)
+    
+    return redirect(url_for('login'))
 
 # Paneles individuales
 @app.route('/turnos')
 def turnos():
+    # Validar acceso
+    acceso_negado = validar_acceso('turnos')
+    if acceso_negado:
+        return acceso_negado
+    
     conn = get_db_connection()
     cur = conn.cursor()
 
@@ -286,6 +421,11 @@ def turnos():
 # --- CRUD Inventario ---
 @app.route('/inventario', methods=['GET', 'POST'])
 def inventario():
+    # Validar acceso
+    acceso_negado = validar_acceso('inventario')
+    if acceso_negado:
+        return acceso_negado
+    
     conn = get_db_connection()
     cur = conn.cursor()
     if request.method == 'POST':
@@ -313,6 +453,11 @@ from flask import jsonify
 # Carrito de productos por habitación en sesión
 @app.route('/ventas', methods=['GET', 'POST'])
 def ventas():
+    # Validar acceso
+    acceso_negado = validar_acceso('ventas')
+    if acceso_negado:
+        return acceso_negado
+    
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute("SELECT * FROM inventario ORDER BY nombre")
@@ -388,6 +533,11 @@ def ventas():
 
 @app.route('/nomina')
 def nomina():
+    # Validar acceso
+    acceso_negado = validar_acceso('nomina')
+    if acceso_negado:
+        return acceso_negado
+    
     return render_template('nomina.html')
 
 @app.route('/api/habitacion_estado/<int:hab_id>', methods=['POST'])
@@ -410,6 +560,11 @@ def api_habitacion_estado(hab_id):
 # --- PANEL: Crear usuario ---
 @app.route('/usuarios', methods=['GET', 'POST'])
 def usuarios():
+    # Validar acceso
+    acceso_negado = validar_acceso('usuarios')
+    if acceso_negado:
+        return acceso_negado
+    
     conn = get_db_connection()
     cur = conn.cursor()
     mensaje = None
@@ -424,16 +579,26 @@ def usuarios():
         contrasena = request.form.get('contrasena')
         estado = request.form.get('estado') or 'Activo'
         funcion = request.form.get('funcion')
-        # Permisos según rol
-        if rol == 'admin':
-            permisos = 'habitaciones,turnos,inventario,ventas,nomina,usuarios,permisos,aseo'
-        else:
-            permisos = ''
+        
         if id_usuario:  # Actualizar
+            # Obtener permisos actuales para no sobrescribir si es colaborador
+            cur.execute("SELECT permisos, rol FROM usuario WHERE id=%s", (id_usuario,))
+            usuario_actual = cur.fetchone()
+            # Si es admin, asignar todos los permisos; si es colaborador, mantener los que ya tiene
+            if rol == 'admin':
+                permisos = 'habitaciones,turnos,inventario,ventas,nomina,usuarios,permisos,aseo'
+            else:
+                # Mantener permisos existentes si es colaborador
+                permisos = usuario_actual['permisos'] if usuario_actual else ''
             cur.execute("UPDATE usuario SET documento=%s, nombres=%s, apellidos=%s, rol=%s, celular=%s, correo=%s, contrasena=%s, estado=%s, funcion=%s, permisos=%s WHERE id=%s",
                 (documento, nombres, apellidos, rol, celular, correo, contrasena, estado, funcion, permisos, id_usuario))
             mensaje = 'Usuario actualizado.'
         else:  # Crear
+            # Nuevos usuarios colaboradores sin permisos
+            if rol == 'admin':
+                permisos = 'habitaciones,turnos,inventario,ventas,nomina,usuarios,permisos,aseo'
+            else:
+                permisos = ''  # Colaborador sin permisos inicialmente
             cur.execute("INSERT INTO usuario (documento, nombres, apellidos, rol, celular, correo, contrasena, estado, funcion, permisos) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
                 (documento, nombres, apellidos, rol, celular, correo, contrasena, estado, funcion, permisos))
             mensaje = 'Usuario creado.'
@@ -447,6 +612,11 @@ def usuarios():
 # --- PANEL: Conceder permisos ---
 @app.route('/permisos', methods=['GET', 'POST'])
 def permisos():
+    # Validar acceso
+    acceso_negado = validar_acceso('permisos')
+    if acceso_negado:
+        return acceso_negado
+    
     conn = get_db_connection()
     cur = conn.cursor()
     mensaje = None
@@ -466,6 +636,11 @@ def permisos():
 # --- PANEL: Aseo general (vacío) ---
 @app.route('/aseo')
 def aseo():
+    # Validar acceso
+    acceso_negado = validar_acceso('aseo')
+    if acceso_negado:
+        return acceso_negado
+    
     return render_template('aseo.html')
 
 if __name__ == '__main__':
