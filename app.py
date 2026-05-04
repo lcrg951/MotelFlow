@@ -1,12 +1,13 @@
 # API para cambiar estado y tiempo de habitación
-from flask import jsonify
-# --- RUTAS DE TURNOS (deben ir después de la definición de app) ---
-from flask import jsonify
+from datetime import datetime, timezone
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    from backports.zoneinfo import ZoneInfo
+
+from flask import Flask, render_template, redirect, url_for, request, session, flash, jsonify
 import psycopg2
 from psycopg2.extras import RealDictCursor
-from flask import Flask, render_template, redirect, url_for, request, session, flash
-
-
 
 app = Flask(__name__)
 app.secret_key = 'supersecretkey'  # Cambia esto por una clave segura en producción
@@ -24,6 +25,15 @@ DB_CONFIG = {
 def get_db_connection():
     conn = psycopg2.connect(**DB_CONFIG, cursor_factory=RealDictCursor)
     return conn
+
+LOCAL_ZONE = ZoneInfo('America/Bogota')
+
+def convertir_a_hora_local(dt):
+    if not dt:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(LOCAL_ZONE)
 
 # Función para obtener usuario por correo
 def obtener_usuario_por_correo(correo):
@@ -269,8 +279,8 @@ def abrir_turno():
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute("""
-        INSERT INTO turno (id_usuario, base_caja, estado)
-        VALUES (%s, %s, 'Abierto')
+        INSERT INTO turno (id_usuario, base_caja, estado, recaudo_total)
+        VALUES (%s, %s, 'Abierto', 0)
         RETURNING id, fecha_apertura
     """, (usuario['id'], base_caja))
     turno = cur.fetchone()
@@ -278,7 +288,8 @@ def abrir_turno():
     cur.close()
     conn.close()
     session['turno_id'] = turno['id']
-    return jsonify({'ok': True, 'turno_id': turno['id'], 'fecha_apertura': turno['fecha_apertura']})
+    fecha_apertura_local = convertir_a_hora_local(turno['fecha_apertura']).strftime('%Y-%m-%d %H:%M:%S')
+    return jsonify({'ok': True, 'turno_id': turno['id'], 'fecha_apertura': fecha_apertura_local})
 
 # Cerrar turno (POST desde empleados.html)
 @app.route('/cerrar_turno', methods=['POST'])
@@ -370,14 +381,14 @@ def panel_admin():
                     conn.close()
                     if turno:
                         turno_abierto = True
-                        fecha_apertura = turno['fecha_apertura']
+                        fecha_apertura = convertir_a_hora_local(turno['fecha_apertura']).strftime('%Y-%m-%d %H:%M:%S')
                 
                 if not turno_abierto:
                     turno = obtener_turno_abierto_usuario(usuario['id'])
                     if turno:
                         session['turno_id'] = turno['id']
                         turno_abierto = True
-                        fecha_apertura = turno['fecha_apertura']
+                        fecha_apertura = convertir_a_hora_local(turno['fecha_apertura']).strftime('%Y-%m-%d %H:%M:%S')
                 
                 return render_template('panel_admin.html', permisos=permisos, turno_abierto=turno_abierto, 
                                      fecha_apertura=fecha_apertura, es_colaborador=es_colaborador)
@@ -413,10 +424,21 @@ def turnos():
     """)
     ultimo_turno = cur.fetchone()
 
+    # Convertir fechas a hora local de Colombia
+    for turno in todos_los_turnos:
+        if turno.get('fecha_apertura'):
+            turno['fecha_apertura'] = convertir_a_hora_local(turno['fecha_apertura'])
+        if turno.get('fecha_cierre'):
+            turno['fecha_cierre'] = convertir_a_hora_local(turno['fecha_cierre'])
+    if ultimo_turno:
+        if ultimo_turno.get('fecha_apertura'):
+            ultimo_turno['fecha_apertura'] = convertir_a_hora_local(ultimo_turno['fecha_apertura'])
+        if ultimo_turno.get('fecha_cierre'):
+            ultimo_turno['fecha_cierre'] = convertir_a_hora_local(ultimo_turno['fecha_cierre'])
+
     cur.close()
     conn.close()
     return render_template('turnos.html', turnos=todos_los_turnos, ultimo=ultimo_turno)
-
 
 # --- CRUD Inventario ---
 @app.route('/inventario', methods=['GET', 'POST'])
@@ -490,20 +512,25 @@ def ventas():
         elif accion == 'registrar_venta' and usuario_id:
             # Registrar venta solo al ocupar
             productos_hab = carrito.get(id_habitacion, [])
-            total = 0
+            stock_ok = True
             for item in productos_hab:
                 cur.execute("SELECT precio_venta, stock_actual FROM inventario WHERE id = %s", (item['id_producto'],))
                 prod = cur.fetchone()
                 if not prod or prod['stock_actual'] < item['cantidad']:
                     mensaje = 'Stock insuficiente para algún producto.'
+                    stock_ok = False
                     break
-                total += float(prod['precio_venta']) * item['cantidad']
-            # Sumar valor de la habitación
-            cur.execute("SELECT precio_estandar FROM habitacion WHERE id = %s", (id_habitacion,))
-            hab = cur.fetchone()
-            if hab:
-                total += float(hab['precio_estandar'])
-            if not mensaje:
+            if stock_ok:
+                total = 0
+                for item in productos_hab:
+                    cur.execute("SELECT precio_venta FROM inventario WHERE id = %s", (item['id_producto'],))
+                    prod = cur.fetchone()
+                    total += float(prod['precio_venta']) * item['cantidad']
+                # Sumar valor de la habitación
+                cur.execute("SELECT precio_estandar FROM habitacion WHERE id = %s", (id_habitacion,))
+                hab = cur.fetchone()
+                if hab:
+                    total += float(hab['precio_estandar'])
                 for item in productos_hab:
                     cur.execute("SELECT precio_venta FROM inventario WHERE id = %s", (item['id_producto'],))
                     prod = cur.fetchone()
@@ -511,6 +538,9 @@ def ventas():
                     cur.execute("INSERT INTO venta (id_usuario, id_habitacion, id_producto, cantidad, total_pago) VALUES (%s, %s, %s, %s, %s)",
                         (usuario_id, id_habitacion, item['id_producto'], item['cantidad'], total_pago))
                     cur.execute("UPDATE inventario SET stock_actual = stock_actual - %s WHERE id = %s", (item['cantidad'], item['id_producto']))
+                # Actualizar recaudo total del turno si es colaborador con turno abierto
+                if 'turno_id' in session and session.get('rol', '').lower() == 'colaborador':
+                    cur.execute("UPDATE turno SET recaudo_total = COALESCE(recaudo_total, 0) + %s WHERE id = %s", (total, session['turno_id']))
                 conn.commit()
                 mensaje = f'Venta registrada. Total: ${total}'
                 carrito.pop(id_habitacion, None)
