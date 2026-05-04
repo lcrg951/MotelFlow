@@ -241,7 +241,18 @@ def cerrar_turno():
 # Panel de administración principal
 @app.route('/panel_admin')
 def panel_admin():
-    return render_template('panel_admin.html')
+    permisos = []
+    if 'usuario' in session:
+        usuario = obtener_usuario_por_correo(session['usuario'])
+        if usuario:
+            if usuario['rol'].lower() == 'admin':
+                # Admin ve todos los paneles
+                permisos = ['habitaciones','turnos','inventario','ventas','nomina','usuarios','permisos','aseo']
+            else:
+                # Colaborador ve solo los asignados
+                if usuario.get('permisos'):
+                    permisos = [p.strip() for p in usuario['permisos'].split(',') if p.strip()]
+    return render_template('panel_admin.html', permisos=permisos)
 
 # Paneles individuales
 @app.route('/turnos')
@@ -404,15 +415,27 @@ def usuarios():
     mensaje = None
     if request.method == 'POST':
         id_usuario = request.form.get('id_usuario')
+        documento = request.form.get('documento')
         nombres = request.form.get('nombres')
+        apellidos = request.form.get('apellidos')
+        rol = request.form.get('rol')
+        celular = request.form.get('celular')
         correo = request.form.get('correo')
         contrasena = request.form.get('contrasena')
-        rol = request.form.get('rol')
+        estado = request.form.get('estado') or 'Activo'
+        funcion = request.form.get('funcion')
+        # Permisos según rol
+        if rol == 'admin':
+            permisos = 'habitaciones,turnos,inventario,ventas,nomina,usuarios,permisos,aseo'
+        else:
+            permisos = ''
         if id_usuario:  # Actualizar
-            cur.execute("UPDATE usuario SET nombres=%s, correo=%s, contrasena=%s, rol=%s WHERE id=%s", (nombres, correo, contrasena, rol, id_usuario))
+            cur.execute("UPDATE usuario SET documento=%s, nombres=%s, apellidos=%s, rol=%s, celular=%s, correo=%s, contrasena=%s, estado=%s, funcion=%s, permisos=%s WHERE id=%s",
+                (documento, nombres, apellidos, rol, celular, correo, contrasena, estado, funcion, permisos, id_usuario))
             mensaje = 'Usuario actualizado.'
         else:  # Crear
-            cur.execute("INSERT INTO usuario (nombres, correo, contrasena, rol) VALUES (%s, %s, %s, %s)", (nombres, correo, contrasena, rol))
+            cur.execute("INSERT INTO usuario (documento, nombres, apellidos, rol, celular, correo, contrasena, estado, funcion, permisos) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                (documento, nombres, apellidos, rol, celular, correo, contrasena, estado, funcion, permisos))
             mensaje = 'Usuario creado.'
         conn.commit()
     cur.execute("SELECT * FROM usuario ORDER BY id")
@@ -430,7 +453,7 @@ def permisos():
     if request.method == 'POST':
         id_usuario = request.form.get('id_usuario')
         paneles = request.form.getlist('paneles')
-        cur.execute("UPDATE usuario SET paneles=%s WHERE id=%s", (','.join(paneles), id_usuario))
+        cur.execute("UPDATE usuario SET permisos=%s WHERE id=%s", (','.join(paneles), id_usuario))
         conn.commit()
         mensaje = 'Permisos actualizados.'
     cur.execute("SELECT * FROM usuario ORDER BY id")

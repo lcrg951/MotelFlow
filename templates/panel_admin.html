@@ -5,38 +5,54 @@
 </div>
 <main>
     <div class="admin-apps-grid" style="display: flex; flex-wrap: wrap; gap: 32px; justify-content: center; margin-top: 32px;">
+        {% if 'habitaciones' in permisos %}
         <a href="/habitaciones" class="admin-app-card">
             <div class="admin-app-icon" style="background:#6c63ff;"><span class="material-icons">meeting_room</span></div>
             <div class="admin-app-title">Habitaciones</div>
         </a>
+        {% endif %}
+        {% if 'turnos' in permisos %}
         <a href="/turnos" class="admin-app-card">
             <div class="admin-app-icon" style="background:#ffb347;"><span class="material-icons">access_time</span></div>
             <div class="admin-app-title">Turnos</div>
         </a>
+        {% endif %}
+        {% if 'inventario' in permisos %}
         <a href="/inventario" class="admin-app-card">
             <div class="admin-app-icon" style="background:#4caf50;"><span class="material-icons">inventory_2</span></div>
             <div class="admin-app-title">Inventario</div>
         </a>
+        {% endif %}
+        {% if 'ventas' in permisos %}
         <a href="/ventas" class="admin-app-card">
             <div class="admin-app-icon" style="background:#f44336;"><span class="material-icons">point_of_sale</span></div>
             <div class="admin-app-title">Ventas</div>
         </a>
+        {% endif %}
+        {% if 'usuarios' in permisos %}
         <a href="/usuarios" class="admin-app-card">
             <div class="admin-app-icon" style="background:#607d8b;"><span class="material-icons">person_add</span></div>
             <div class="admin-app-title">Crear Usuario</div>
         </a>
+        {% endif %}
+        {% if 'permisos' in permisos %}
         <a href="/permisos" class="admin-app-card">
             <div class="admin-app-icon" style="background:#ff9800;"><span class="material-icons">security</span></div>
             <div class="admin-app-title">Conceder Permisos</div>
         </a>
+        {% endif %}
+        {% if 'aseo' in permisos %}
         <a href="/aseo" class="admin-app-card">
             <div class="admin-app-icon" style="background:#009688;"><span class="material-icons">cleaning_services</span></div>
             <div class="admin-app-title">Aseo General</div>
         </a>
+        {% endif %}
+        {% if 'nomina' in permisos %}
         <a href="/nomina" class="admin-app-card">
             <div class="admin-app-icon" style="background:#00bcd4;"><span class="material-icons">people</span></div>
             <div class="admin-app-title">Nómina</div>
         </a>
+        {% endif %}
     </div>
 </main>
 <style>
