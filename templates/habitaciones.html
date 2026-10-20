@@ -10,6 +10,7 @@
             <h2>Panel de Administrador</h2>
             <p>Bienvenido al panel de administración. Aquí puedes gestionar el motel.</p>
             <form method="post" style="margin-bottom:18px;">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <h3>Agregar Habitación</h3>
                 <input type="text" name="numero" placeholder="Número" required>
                 <input type="text" name="tipo" placeholder="Tipo" required>

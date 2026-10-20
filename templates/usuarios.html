@@ -5,13 +5,14 @@
     <div style="padding:32px;max-width:700px;margin:auto;">
         <h2>Crear / Editar Usuario</h2>
         <form method="post" style="margin-bottom:18px;display:grid;grid-template-columns:repeat(2,1fr);gap:12px;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" name="id_usuario" id="id_usuario">
             <input type="text" name="documento" placeholder="Documento" required>
             <input type="text" name="nombres" placeholder="Nombres" required>
             <input type="text" name="apellidos" placeholder="Apellidos" required>
             <input type="text" name="celular" placeholder="Celular">
             <input type="email" name="correo" placeholder="Correo" required>
-            <input type="password" name="contrasena" placeholder="Contraseña" required>
+            <input type="password" name="contrasena" placeholder="Contraseña (mínimo 8 caracteres)" minlength="8" maxlength="128" required>
             <select name="rol" required>
                 <option value="">Rol</option>
                 <option value="admin">Admin</option>
@@ -41,24 +42,29 @@
                 <td>{{u.funcion}}</td>
                 <td>{{u.permisos}}</td>
                 <td>
-                    <button onclick="editarUsuario('{{u.id}}','{{u.documento}}','{{u.nombres}}','{{u.apellidos}}','{{u.celular}}','{{u.correo}}','{{u.contrasena}}','{{u.rol}}','{{u.estado}}','{{u.funcion}}')">Editar</button>
+                    <button type="button" onclick='editarUsuario({{ {"id": u.id, "documento": u.documento, "nombres": u.nombres, "apellidos": u.apellidos, "celular": u.celular, "correo": u.correo, "rol": (u.rol or "")|lower, "estado": u.estado, "funcion": u.funcion}|tojson }})'>Editar</button>
                 </td>
             </tr>
             {% endfor %}
         </table>
     </div>
     <script>
-        function editarUsuario(id, documento, nombres, apellidos, celular, correo, contrasena, rol, estado, funcion) {
-            document.getElementById('id_usuario').value = id;
-            document.querySelector('input[name=documento]').value = documento;
-            document.querySelector('input[name=nombres]').value = nombres;
-            document.querySelector('input[name=apellidos]').value = apellidos;
-            document.querySelector('input[name=celular]').value = celular;
-            document.querySelector('input[name=correo]').value = correo;
-            document.querySelector('input[name=contrasena]').value = '';
-            document.querySelector('select[name=rol]').value = rol;
-            document.querySelector('select[name=estado]').value = estado;
-            document.querySelector('input[name=funcion]').value = funcion;
+        // SEGURIDAD: recibe un objeto JSON escapado y no incluye la contraseña
+        function editarUsuario(u) {
+            document.getElementById('id_usuario').value = u.id;
+            document.querySelector('input[name=documento]').value = u.documento || '';
+            document.querySelector('input[name=nombres]').value = u.nombres || '';
+            document.querySelector('input[name=apellidos]').value = u.apellidos || '';
+            document.querySelector('input[name=celular]').value = u.celular || '';
+            document.querySelector('input[name=correo]').value = u.correo || '';
+            // Al editar, la contraseña es opcional: si se deja vacía no se cambia
+            const campoContrasena = document.querySelector('input[name=contrasena]');
+            campoContrasena.value = '';
+            campoContrasena.required = false;
+            campoContrasena.placeholder = 'Nueva contraseña (vacío = no cambiar)';
+            document.querySelector('select[name=rol]').value = u.rol || '';
+            document.querySelector('select[name=estado]').value = u.estado || 'Activo';
+            document.querySelector('input[name=funcion]').value = u.funcion || '';
         }
     </script>
 </main>

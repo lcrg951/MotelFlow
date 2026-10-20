@@ -50,6 +50,7 @@
         <span class="close" onclick="cerrarModalTiempo()">&times;</span>
         <h2>¿Qué tipo de estadía deseas?</h2>
         <form id="form-tiempo" action="/reservar" method="post">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" name="room_id" id="room_id_modal_tiempo">
             <input type="hidden" name="decoraciones" id="decoraciones_modal_tiempo">
             <div class="decoraciones-list">

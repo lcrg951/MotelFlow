@@ -5,6 +5,7 @@
     <div style="padding:32px;text-align:center;max-width:600px;margin:auto;">
         <h2>Inventario</h2>
         <form method="post" style="margin-bottom:18px;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <h3>Agregar Producto</h3>
             <input type="text" name="nombre" placeholder="Nombre" required>
             <input type="number" name="stock_actual" placeholder="Stock" required>

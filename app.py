@@ -1,28 +1,91 @@
 # API para cambiar estado y tiempo de habitación
-from datetime import datetime, timezone
+import os
+import re
+import secrets
+import time
+from datetime import datetime, timezone, timedelta
+from decimal import Decimal, InvalidOperation
 try:
     from zoneinfo import ZoneInfo
 except ImportError:
     from backports.zoneinfo import ZoneInfo
 
-from flask import Flask, render_template, redirect, url_for, request, session, flash, jsonify
+from flask import Flask, render_template, redirect, url_for, request, session, flash, jsonify, abort
+from werkzeug.security import generate_password_hash, check_password_hash
+from werkzeug.middleware.proxy_fix import ProxyFix
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
-app = Flask(__name__)
-app.secret_key = 'supersecretkey'  # Cambia esto por una clave segura en producción
 
-# Configuración de conexión a NeonDB PostgreSQL
+# =====================================================================
+# SEGURIDAD: Carga de variables de entorno desde un archivo .env
+# ---------------------------------------------------------------------
+# Las credenciales (clave secreta, contraseña de la BD) ya NO van escritas
+# en el código. Se leen de variables de entorno. Para desarrollo local se
+# pueden poner en un archivo .env (que está en .gitignore y nunca se sube
+# a GitHub). Este cargador es mínimo para no agregar dependencias nuevas.
+# Las variables que ya existan en el sistema tienen prioridad sobre el .env.
+# =====================================================================
+def cargar_env(ruta=os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')):
+    if not os.path.exists(ruta):
+        return
+    with open(ruta, encoding='utf-8') as archivo:
+        for linea in archivo:
+            linea = linea.strip()
+            if not linea or linea.startswith('#') or '=' not in linea:
+                continue
+            clave, valor = linea.split('=', 1)
+            os.environ.setdefault(clave.strip(), valor.strip().strip('"').strip("'"))
+
+cargar_env()
+
+# SEGURIDAD: el modo debug solo se activa explícitamente (FLASK_DEBUG=1).
+# Con debug activo, Flask muestra una consola interactiva que permite
+# ejecutar código en el servidor: jamás debe estar encendido en producción.
+MODO_DEBUG = os.environ.get('FLASK_DEBUG') == '1'
+
+app = Flask(__name__)
+
+# SEGURIDAD: clave secreta leída del entorno. Con ella se firman las cookies
+# de sesión; si alguien la conoce puede falsificar una sesión de admin.
+# Si no está definida se genera una aleatoria (las sesiones se pierden al
+# reiniciar el servidor, pero nunca se usa una clave conocida).
+app.secret_key = os.environ.get('SECRET_KEY') or secrets.token_hex(32)
+if not os.environ.get('SECRET_KEY'):
+    app.logger.warning('SECRET_KEY no definida: se usa una clave temporal aleatoria.')
+
+# SEGURIDAD: configuración de la cookie de sesión.
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,       # JavaScript no puede leer la cookie (mitiga robo por XSS)
+    SESSION_COOKIE_SAMESITE='Lax',      # El navegador no la envía en peticiones POST desde otros sitios
+    SESSION_COOKIE_SECURE=not MODO_DEBUG,  # En producción solo viaja por HTTPS
+    PERMANENT_SESSION_LIFETIME=timedelta(hours=8),  # La sesión expira tras 8 horas (un turno)
+    MAX_CONTENT_LENGTH=1 * 1024 * 1024,  # Rechaza peticiones de más de 1 MB
+)
+
+# SEGURIDAD: si la app corre detrás de un proxy (Render, Heroku, Nginx),
+# esto permite conocer la IP real del cliente y si la conexión es HTTPS.
+# Solo se activa con CONFIAR_PROXY=1, porque sin proxy un atacante podría
+# falsificar la cabecera X-Forwarded-For.
+if os.environ.get('CONFIAR_PROXY') == '1':
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
+
+# SEGURIDAD: configuración de conexión a NeonDB PostgreSQL desde el entorno.
+# Se acepta DATABASE_URL (formato típico de los servicios en la nube) o las
+# variables separadas DB_NAME, DB_USER, DB_PASSWORD, DB_HOST, DB_PORT.
+DATABASE_URL = os.environ.get('DATABASE_URL')
 DB_CONFIG = {
-    'dbname': 'neondb',
-    'user': 'neondb_owner',
-    'password': 'npg_EZt5bfOFHhN9',
-    'host': 'ep-holy-shadow-am69l4k1-pooler.c-5.us-east-1.aws.neon.tech',
-    'port': 5432,
+    'dbname': os.environ.get('DB_NAME', 'neondb'),
+    'user': os.environ.get('DB_USER'),
+    'password': os.environ.get('DB_PASSWORD'),
+    'host': os.environ.get('DB_HOST'),
+    'port': int(os.environ.get('DB_PORT', 5432)),
     'sslmode': 'require'
 }
 
 def get_db_connection():
+    if DATABASE_URL:
+        return psycopg2.connect(DATABASE_URL, sslmode='require', cursor_factory=RealDictCursor)
     conn = psycopg2.connect(**DB_CONFIG, cursor_factory=RealDictCursor)
     return conn
 
@@ -35,6 +98,196 @@ def convertir_a_hora_local(dt):
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(LOCAL_ZONE)
 
+
+# =====================================================================
+# SEGURIDAD: Protección CSRF (Cross-Site Request Forgery)
+# ---------------------------------------------------------------------
+# Sin esto, una página maliciosa podría hacer que el navegador de un admin
+# con sesión abierta envíe formularios a MotelFlow (crear usuarios, dar
+# permisos, registrar ventas...). Cada sesión recibe un token aleatorio que
+# debe acompañar toda petición POST: en formularios como campo oculto
+# "csrf_token" y en fetch() como cabecera "X-CSRFToken".
+# =====================================================================
+def generar_csrf_token():
+    if '_csrf_token' not in session:
+        session['_csrf_token'] = secrets.token_urlsafe(32)
+    return session['_csrf_token']
+
+# Permite usar {{ csrf_token() }} dentro de las plantillas
+app.jinja_env.globals['csrf_token'] = generar_csrf_token
+
+@app.before_request
+def proteger_csrf():
+    if request.method not in ('POST', 'PUT', 'PATCH', 'DELETE'):
+        return
+    token_sesion = session.get('_csrf_token')
+    token_enviado = request.form.get('csrf_token') or request.headers.get('X-CSRFToken')
+    # compare_digest compara en tiempo constante (evita ataques de temporización)
+    if not token_sesion or not token_enviado or not secrets.compare_digest(token_sesion, token_enviado):
+        app.logger.warning('CSRF inválido en %s desde %s', request.path, request.remote_addr)
+        abort(400)
+
+
+# =====================================================================
+# SEGURIDAD: Cabeceras HTTP de seguridad en todas las respuestas
+# =====================================================================
+@app.after_request
+def agregar_cabeceras_seguridad(respuesta):
+    # Impide que el navegador "adivine" el tipo de archivo (evita ejecutar subidas como script)
+    respuesta.headers['X-Content-Type-Options'] = 'nosniff'
+    # Impide que otra web incruste MotelFlow en un iframe (clickjacking)
+    respuesta.headers['X-Frame-Options'] = 'DENY'
+    # No envía la URL completa a sitios externos (p. ej. al abrir WhatsApp)
+    respuesta.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+    # Desactiva APIs del navegador que la app no usa
+    respuesta.headers['Permissions-Policy'] = 'camera=(), microphone=(), geolocation=()'
+    # Política de contenido: solo se cargan scripts, estilos y medios del propio
+    # servidor (y las fuentes de Google). 'unsafe-inline' es necesario porque las
+    # plantillas usan <script> y onclick en línea.
+    respuesta.headers['Content-Security-Policy'] = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "font-src 'self' https://fonts.gstatic.com; "
+        "img-src 'self' data:; "
+        "media-src 'self'; "
+        "object-src 'none'; "
+        "base-uri 'self'; "
+        "form-action 'self'; "
+        "frame-ancestors 'none'"
+    )
+    # Con HTTPS, obliga al navegador a usar siempre HTTPS durante un año
+    if request.is_secure:
+        respuesta.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
+    # Las páginas internas no se guardan en caché: tras cerrar sesión, el botón
+    # "Atrás" no debe mostrar datos de usuarios, ventas o turnos
+    if 'usuario' in session:
+        respuesta.headers['Cache-Control'] = 'no-store'
+    return respuesta
+
+
+# =====================================================================
+# SEGURIDAD: Manejadores de errores
+# ---------------------------------------------------------------------
+# Muestran un mensaje genérico en lugar de detalles internos (rutas,
+# consultas SQL, trazas de Python) que le darían pistas a un atacante.
+# =====================================================================
+MENSAJES_ERROR = {
+    400: 'Solicitud inválida o formulario vencido. Recarga la página e inténtalo de nuevo.',
+    403: 'No tienes permisos para realizar esta acción.',
+    404: 'La página solicitada no existe.',
+    405: 'Método no permitido.',
+    413: 'La información enviada es demasiado grande.',
+    500: 'Ocurrió un error interno. Inténtalo más tarde.',
+}
+
+def responder_error(codigo):
+    mensaje = MENSAJES_ERROR.get(codigo, 'Error')
+    if request.is_json or request.path.startswith('/api/'):
+        return jsonify({'ok': False, 'msg': mensaje}), codigo
+    return f'<h2>Error {codigo}</h2><p>{mensaje}</p><p><a href="/">Volver al inicio</a></p>', codigo
+
+for _codigo in MENSAJES_ERROR:
+    app.register_error_handler(_codigo, lambda e, c=_codigo: responder_error(c))
+
+
+# =====================================================================
+# SEGURIDAD: Funciones de validación de datos de entrada
+# ---------------------------------------------------------------------
+# Nunca se confía en lo que llega del navegador: el usuario puede modificar
+# el HTML o enviar peticiones a mano. Cada función devuelve None si el dato
+# no es válido.
+# =====================================================================
+REGEX_CORREO = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
+
+def leer_entero(valor, minimo=None, maximo=None):
+    try:
+        numero = int(str(valor).strip())
+    except (TypeError, ValueError):
+        return None
+    if (minimo is not None and numero < minimo) or (maximo is not None and numero > maximo):
+        return None
+    return numero
+
+def leer_decimal(valor, minimo=Decimal('0'), maximo=Decimal('1000000000')):
+    try:
+        numero = Decimal(str(valor).strip())
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+    # is_finite descarta valores como "NaN" o "Infinity"
+    if not numero.is_finite() or numero < minimo or numero > maximo:
+        return None
+    return numero
+
+def leer_texto(valor, max_largo, requerido=True):
+    texto = (valor or '').strip()
+    if (requerido and not texto) or len(texto) > max_largo:
+        return None
+    return texto
+
+
+# =====================================================================
+# SEGURIDAD: Contraseñas cifradas (hash)
+# ---------------------------------------------------------------------
+# Antes las contraseñas se guardaban en texto plano: cualquiera con acceso
+# a la BD las veía. Ahora se guarda un hash (scrypt, con sal aleatoria) que
+# no se puede revertir. Los usuarios antiguos se migran automáticamente: la
+# primera vez que inician sesión con su contraseña en texto plano, esta se
+# reemplaza por su hash.
+# =====================================================================
+LONGITUD_MINIMA_CONTRASENA = 8
+PREFIJOS_HASH = ('scrypt:', 'pbkdf2:')
+# Hash ficticio para comparar cuando el correo no existe, así la respuesta
+# tarda lo mismo y no revela qué correos están registrados
+HASH_FICTICIO = generate_password_hash(secrets.token_hex(16))
+
+def es_hash(contrasena_guardada):
+    return (contrasena_guardada or '').startswith(PREFIJOS_HASH)
+
+def verificar_contrasena(usuario, contrasena):
+    guardada = usuario['contrasena'] or ''
+    if es_hash(guardada):
+        return check_password_hash(guardada, contrasena)
+    # Contraseña antigua en texto plano: comparar y migrar a hash
+    if secrets.compare_digest(guardada.encode('utf-8'), contrasena.encode('utf-8')):
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("UPDATE usuario SET contrasena = %s WHERE id = %s",
+                    (generate_password_hash(contrasena), usuario['id']))
+        conn.commit()
+        cur.close()
+        conn.close()
+        return True
+    return False
+
+
+# =====================================================================
+# SEGURIDAD: Límite de intentos de inicio de sesión (fuerza bruta)
+# ---------------------------------------------------------------------
+# Tras 5 intentos fallidos con el mismo correo desde la misma IP, se bloquea
+# el login por 5 minutos. Se guarda en memoria del servidor (se reinicia al
+# reiniciar la app), suficiente para frenar ataques automatizados.
+# =====================================================================
+MAX_INTENTOS_LOGIN = 5
+MINUTOS_BLOQUEO = 5
+intentos_login = {}  # clave -> {'fallos': int, 'bloqueado_hasta': timestamp}
+
+def clave_intentos(correo):
+    return f"{request.remote_addr}|{correo.lower()}"
+
+def login_bloqueado(clave):
+    registro = intentos_login.get(clave)
+    return bool(registro and registro['bloqueado_hasta'] > time.time())
+
+def registrar_fallo_login(clave):
+    registro = intentos_login.setdefault(clave, {'fallos': 0, 'bloqueado_hasta': 0})
+    registro['fallos'] += 1
+    if registro['fallos'] >= MAX_INTENTOS_LOGIN:
+        registro['fallos'] = 0
+        registro['bloqueado_hasta'] = time.time() + MINUTOS_BLOQUEO * 60
+        app.logger.warning('Login bloqueado temporalmente para %s', clave)
+
+
 # Función para obtener usuario por correo
 def obtener_usuario_por_correo(correo):
     conn = get_db_connection()
@@ -45,19 +298,35 @@ def obtener_usuario_por_correo(correo):
     conn.close()
     return usuario
 
+# SEGURIDAD: devuelve el usuario de la sesión solo si sigue existiendo y está
+# Activo. Si un admin desactiva a un colaborador, este pierde el acceso en su
+# siguiente clic, aunque tenga la sesión abierta.
+def obtener_usuario_actual():
+    if 'usuario' not in session:
+        return None
+    usuario = obtener_usuario_por_correo(session['usuario'])
+    if not usuario or (usuario.get('estado') or '').lower() != 'activo':
+        session.clear()
+        return None
+    return usuario
+
+def es_admin(usuario):
+    return bool(usuario) and (usuario['rol'] or '').lower() == 'admin'
+
+PANELES = ['habitaciones', 'turnos', 'inventario', 'ventas', 'nomina', 'usuarios', 'permisos', 'aseo']
+
 # Función para obtener los permisos del usuario actual
 def obtener_permisos_usuario():
-    if 'usuario' not in session:
-        return []
-    usuario = obtener_usuario_por_correo(session['usuario'])
+    usuario = obtener_usuario_actual()
     if not usuario:
         return []
-    if usuario['rol'].lower() == 'admin':
-        return ['habitaciones', 'turnos', 'inventario', 'ventas', 'nomina', 'usuarios', 'permisos', 'aseo']
+    if es_admin(usuario):
+        return list(PANELES)
     else:
         # Colaborador: obtener permisos asignados
         if usuario.get('permisos'):
-            return [p.strip() for p in usuario['permisos'].split(',') if p.strip()]
+            # SEGURIDAD: solo se aceptan nombres de panel conocidos
+            return [p.strip() for p in usuario['permisos'].split(',') if p.strip() in PANELES]
         return []
 
 # Función para validar si el usuario tiene permiso para un panel
@@ -68,6 +337,8 @@ def tiene_permiso(panel_requerido):
 # Función para redirigir si no tiene permiso
 def validar_acceso(panel_requerido):
     if not tiene_permiso(panel_requerido):
+        # SEGURIDAD: se registra el intento de acceso no autorizado
+        app.logger.warning('Acceso denegado a "%s" para %s', panel_requerido, session.get('usuario', 'anónimo'))
         flash('No tienes permisos para acceder a este módulo.')
         return redirect(url_for('panel_admin'))
     return None
@@ -138,6 +409,14 @@ TIEMPOS = [
     }
 ]
 
+# SEGURIDAD: valores permitidos para los campos que vienen de listas fijas
+ROLES_VALIDOS = ('admin', 'colaborador')
+ESTADOS_USUARIO = ('Activo', 'Inactivo')
+ESTADOS_HABITACION = ('Libre', 'Ocupada', 'Sucia')
+TIEMPOS_HABITACION = ('rato', 'amanecida')
+# Las reservas viven en la cookie de sesión (máx. ~4 KB), por eso se limitan
+MAX_RESERVAS_CARRITO = 10
+
 @app.route('/')
 def index():
     return render_template('index.html', rooms=ROOMS, decoraciones=DECORACIONES, tiempos=TIEMPOS)
@@ -158,14 +437,19 @@ def cart():
 # Ruta para reservar habitación, decoraciones y tiempo
 @app.route('/reservar', methods=['POST'])
 def reservar():
-    room_id = int(request.form.get('room_id'))
+    # SEGURIDAD: antes int(None) hacía caer la app con error 500
+    room_id = leer_entero(request.form.get('room_id'), minimo=1)
     deco_ids = request.form.getlist('decoraciones')
     tiempo_id = request.form.get('tiempo')
+    # Los precios salen siempre del catálogo del servidor, nunca del formulario
     room = next((r for r in ROOMS if r['id'] == room_id), None)
     decoraciones = [d for d in DECORACIONES if str(d['id']) in deco_ids]
     tiempo = next((t for t in TIEMPOS if t['id'] == tiempo_id), None)
     if room:
         reservas = session.get('reservas', [])
+        if len(reservas) >= MAX_RESERVAS_CARRITO:
+            flash('Has alcanzado el máximo de reservas en el carrito.')
+            return redirect(url_for('cart'))
         reservas.append({'habitacion': room, 'decoraciones': decoraciones, 'tiempo': tiempo})
         session['reservas'] = reservas
     return redirect(url_for('cart'))
@@ -176,15 +460,41 @@ def reservar():
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
-        correo = request.form.get('usuario')
-        contrasena = request.form.get('contrasena')
-        usuario = obtener_usuario_por_correo(correo)
-        if usuario and usuario['contrasena'] == contrasena:
+        correo = (request.form.get('usuario') or '').strip()
+        contrasena = request.form.get('contrasena') or ''
+        clave = clave_intentos(correo)
+
+        # SEGURIDAD: bloqueo temporal tras demasiados intentos fallidos
+        if login_bloqueado(clave):
+            flash(f'Demasiados intentos fallidos. Espera {MINUTOS_BLOQUEO} minutos e inténtalo de nuevo.')
+            return redirect(url_for('login'))
+
+        # SEGURIDAD: se descartan entradas vacías o absurdamente largas
+        usuario = None
+        if correo and contrasena and len(correo) <= 100 and len(contrasena) <= 128:
+            usuario = obtener_usuario_por_correo(correo)
+
+        if usuario and verificar_contrasena(usuario, contrasena):
+            if (usuario.get('estado') or '').lower() != 'activo':
+                flash('Tu usuario está inactivo. Comunícate con el administrador.')
+                return redirect(url_for('login'))
+            intentos_login.pop(clave, None)
+            # SEGURIDAD: se limpia la sesión anterior antes de autenticar
+            # (evita la "fijación de sesión") y se genera un token CSRF nuevo
+            session.clear()
+            session.permanent = True
             session['usuario'] = usuario['correo']
             session['rol'] = usuario['rol']
+            app.logger.info('Inicio de sesión exitoso: %s', usuario['correo'])
             # Ambos Admin y Colaborador van a /admin que redirige a /panel_admin
             return redirect(url_for('admin'))
         else:
+            if not usuario:
+                # Misma demora que con un usuario real (no revela si el correo existe)
+                check_password_hash(HASH_FICTICIO, contrasena)
+            registrar_fallo_login(clave)
+            app.logger.warning('Inicio de sesión fallido para "%s" desde %s', correo[:100], request.remote_addr)
+            # Mensaje genérico: no se indica si falló el correo o la contraseña
             flash('Usuario o contraseña incorrectos.')
             return redirect(url_for('login'))
     return render_template('login.html')
@@ -203,10 +513,10 @@ def eliminar(idx):
 # Ruta para empleados
 @app.route('/empleados', methods=['GET'])
 def empleados():
-    if 'usuario' not in session:
+    usuario = obtener_usuario_actual()
+    if not usuario:
         return redirect(url_for('login'))
-    usuario = obtener_usuario_por_correo(session['usuario'])
-    if not usuario or usuario['rol'].lower() != 'colaborador':
+    if usuario['rol'].lower() != 'colaborador':
         flash('Acceso restringido.')
         return redirect(url_for('login'))
 
@@ -216,7 +526,9 @@ def empleados():
     if 'turno_id' in session:
         conn = get_db_connection()
         cur = conn.cursor()
-        cur.execute("SELECT * FROM turno WHERE id = %s AND estado IN ('Abierto', 'abierto')", (session['turno_id'],))
+        # SEGURIDAD: se verifica que el turno pertenezca al usuario de la sesión
+        cur.execute("SELECT * FROM turno WHERE id = %s AND id_usuario = %s AND estado IN ('Abierto', 'abierto')",
+                    (session['turno_id'], usuario['id']))
         turno = cur.fetchone()
         cur.close()
         conn.close()
@@ -242,16 +554,20 @@ def habitaciones():
     acceso_negado = validar_acceso('habitaciones')
     if acceso_negado:
         return acceso_negado
-    
+
     conn = get_db_connection()
     cur = conn.cursor()
     if request.method == 'POST':
         # Registrar nueva habitación
-        numero = request.form['numero']
-        tipo = request.form['tipo']
-        precio = request.form['precio_estandar']
-        cur.execute("INSERT INTO habitacion (numero, tipo, precio_estandar) VALUES (%s, %s, %s)", (numero, tipo, precio))
-        conn.commit()
+        # SEGURIDAD: validación de longitud (según la BD) y de precio positivo
+        numero = leer_texto(request.form.get('numero'), 10)
+        tipo = leer_texto(request.form.get('tipo'), 50)
+        precio = leer_decimal(request.form.get('precio_estandar'))
+        if numero is None or tipo is None or precio is None:
+            flash('Datos de habitación inválidos.')
+        else:
+            cur.execute("INSERT INTO habitacion (numero, tipo, precio_estandar) VALUES (%s, %s, %s)", (numero, tipo, precio))
+            conn.commit()
     cur.execute("SELECT * FROM habitacion ORDER BY id")
     habitaciones = cur.fetchall()
     cur.close()
@@ -259,22 +575,21 @@ def habitaciones():
     return render_template('habitaciones.html', habitaciones=habitaciones)
 
 
-@app.route('/admin', methods=['GET', 'POST'])
+@app.route('/admin', methods=['GET'])
 def admin():
     return render_template('admin.html')
 
 # Crear turno (POST desde empleados.html)
 @app.route('/abrir_turno', methods=['POST'])
 def abrir_turno():
-    if 'usuario' not in session:
-        return jsonify({'ok': False, 'msg': 'No autenticado'}), 401
-    correo = session['usuario']
-    usuario = obtener_usuario_por_correo(correo)
+    usuario = obtener_usuario_actual()
     if not usuario:
-        return jsonify({'ok': False, 'msg': 'Usuario no encontrado'}), 404
-    base_caja = request.json.get('base_caja')
-    if base_caja is None or str(base_caja).strip() == '':
-        return jsonify({'ok': False, 'msg': 'Monto requerido'}), 400
+        return jsonify({'ok': False, 'msg': 'No autenticado'}), 401
+    # SEGURIDAD: get_json(silent=True) evita un error 500 si el cuerpo no es JSON
+    datos = request.get_json(silent=True) or {}
+    base_caja = leer_decimal(datos.get('base_caja'))
+    if base_caja is None:
+        return jsonify({'ok': False, 'msg': 'Monto inválido'}), 400
     # Insertar turno
     conn = get_db_connection()
     cur = conn.cursor()
@@ -306,17 +621,16 @@ def cerrar_turno():
     conn.commit()
     cur.close()
     conn.close()
-    session.pop('turno_id', None)
-    session.pop('usuario', None)
-    session.pop('rol', None)
+    # SEGURIDAD: se borra toda la sesión, no solo algunas claves
+    session.clear()
     return jsonify({'ok': True})
 
 # Logout para Admin (sin registrar turno)
-@app.route('/logout', methods=['GET'])
+# SEGURIDAD: ahora es POST (con token CSRF). Con GET, cualquier página externa
+# podía cerrar la sesión del usuario con una simple etiqueta <img>.
+@app.route('/logout', methods=['POST'])
 def logout():
-    session.pop('turno_id', None)
-    session.pop('usuario', None)
-    session.pop('rol', None)
+    session.clear()
     flash('Sesión cerrada correctamente.')
     return redirect(url_for('login'))
 
@@ -332,6 +646,8 @@ def cerrar_sesion():
         observaciones = datos.get('observaciones', '')
     else:
         observaciones = request.form.get('observaciones', '')
+    # SEGURIDAD: límite de longitud para las observaciones
+    observaciones = str(observaciones or '').strip()[:1000]
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute("""
@@ -341,9 +657,7 @@ def cerrar_sesion():
     conn.commit()
     cur.close()
     conn.close()
-    session.pop('turno_id', None)
-    session.pop('usuario', None)
-    session.pop('rol', None)
+    session.clear()
     return jsonify({'ok': True})
 
 # --- RUTAS DE TURNOS (deben ir después de la definición de app) ---
@@ -353,46 +667,45 @@ def cerrar_sesion():
 @app.route('/panel_admin')
 def panel_admin():
     permisos = obtener_permisos_usuario()
-    es_admin = False
     es_colaborador = False
-    
-    if 'usuario' in session:
-        usuario = obtener_usuario_por_correo(session['usuario'])
-        if usuario:
-            es_admin = usuario['rol'].lower() == 'admin'
-            es_colaborador = usuario['rol'].lower() == 'colaborador'
-            
-            # Si es Admin, mostrar vista admin_panel.html sin turnos
-            if es_admin:
-                return render_template('admin_panel.html', permisos=permisos)
-            
-            # Si es Colaborador, verificar turno abierto
-            if es_colaborador:
-                turno_abierto = False
-                fecha_apertura = None
-                
-                # Verificar si tiene turno abierto
-                if 'turno_id' in session:
-                    conn = get_db_connection()
-                    cur = conn.cursor()
-                    cur.execute("SELECT * FROM turno WHERE id = %s AND estado IN ('Abierto', 'abierto')", (session['turno_id'],))
-                    turno = cur.fetchone()
-                    cur.close()
-                    conn.close()
-                    if turno:
-                        turno_abierto = True
-                        fecha_apertura = convertir_a_hora_local(turno['fecha_apertura']).strftime('%Y-%m-%d %H:%M:%S')
-                
-                if not turno_abierto:
-                    turno = obtener_turno_abierto_usuario(usuario['id'])
-                    if turno:
-                        session['turno_id'] = turno['id']
-                        turno_abierto = True
-                        fecha_apertura = convertir_a_hora_local(turno['fecha_apertura']).strftime('%Y-%m-%d %H:%M:%S')
-                
-                return render_template('panel_admin.html', permisos=permisos, turno_abierto=turno_abierto, 
-                                     fecha_apertura=fecha_apertura, es_colaborador=es_colaborador)
-    
+
+    usuario = obtener_usuario_actual()
+    if usuario:
+        es_colaborador = usuario['rol'].lower() == 'colaborador'
+
+        # Si es Admin, mostrar vista admin_panel.html sin turnos
+        if es_admin(usuario):
+            return render_template('admin_panel.html', permisos=permisos)
+
+        # Si es Colaborador, verificar turno abierto
+        if es_colaborador:
+            turno_abierto = False
+            fecha_apertura = None
+
+            # Verificar si tiene turno abierto
+            if 'turno_id' in session:
+                conn = get_db_connection()
+                cur = conn.cursor()
+                # SEGURIDAD: el turno debe pertenecer al usuario de la sesión
+                cur.execute("SELECT * FROM turno WHERE id = %s AND id_usuario = %s AND estado IN ('Abierto', 'abierto')",
+                            (session['turno_id'], usuario['id']))
+                turno = cur.fetchone()
+                cur.close()
+                conn.close()
+                if turno:
+                    turno_abierto = True
+                    fecha_apertura = convertir_a_hora_local(turno['fecha_apertura']).strftime('%Y-%m-%d %H:%M:%S')
+
+            if not turno_abierto:
+                turno = obtener_turno_abierto_usuario(usuario['id'])
+                if turno:
+                    session['turno_id'] = turno['id']
+                    turno_abierto = True
+                    fecha_apertura = convertir_a_hora_local(turno['fecha_apertura']).strftime('%Y-%m-%d %H:%M:%S')
+
+            return render_template('panel_admin.html', permisos=permisos, turno_abierto=turno_abierto,
+                                 fecha_apertura=fecha_apertura, es_colaborador=es_colaborador)
+
     return redirect(url_for('login'))
 
 # Paneles individuales
@@ -402,24 +715,24 @@ def turnos():
     acceso_negado = validar_acceso('turnos')
     if acceso_negado:
         return acceso_negado
-    
+
     conn = get_db_connection()
     cur = conn.cursor()
 
     # 1. Obtener todos los turnos (uniendo con la tabla usuario para ver el nombre)
     cur.execute("""
-        SELECT t.*, u.nombres as nombre_usuario 
-        FROM turno t 
-        JOIN usuario u ON t.id_usuario = u.id 
+        SELECT t.*, u.nombres as nombre_usuario
+        FROM turno t
+        JOIN usuario u ON t.id_usuario = u.id
         ORDER BY t.fecha_apertura DESC
     """)
     todos_los_turnos = cur.fetchall()
 
     # 2. Obtener solo el último registro
     cur.execute("""
-        SELECT t.*, u.nombres as nombre_usuario 
-        FROM turno t 
-        JOIN usuario u ON t.id_usuario = u.id 
+        SELECT t.*, u.nombres as nombre_usuario
+        FROM turno t
+        JOIN usuario u ON t.id_usuario = u.id
         ORDER BY t.id DESC LIMIT 1
     """)
     ultimo_turno = cur.fetchone()
@@ -447,18 +760,22 @@ def inventario():
     acceso_negado = validar_acceso('inventario')
     if acceso_negado:
         return acceso_negado
-    
+
     conn = get_db_connection()
     cur = conn.cursor()
     if request.method == 'POST':
-        nombre = request.form['nombre']
-        stock_actual = request.form['stock_actual']
-        precio_costo = request.form['precio_costo']
-        precio_venta = request.form['precio_venta']
-        stock_minimo = request.form['stock_minimo']
-        cur.execute("INSERT INTO inventario (nombre, stock_actual, precio_costo, precio_venta, stock_minimo) VALUES (%s, %s, %s, %s, %s)",
-            (nombre, stock_actual, precio_costo, precio_venta, stock_minimo))
-        conn.commit()
+        # SEGURIDAD: stock y precios deben ser números no negativos
+        nombre = leer_texto(request.form.get('nombre'), 100)
+        stock_actual = leer_entero(request.form.get('stock_actual'), minimo=0, maximo=1000000)
+        precio_costo = leer_decimal(request.form.get('precio_costo'))
+        precio_venta = leer_decimal(request.form.get('precio_venta'))
+        stock_minimo = leer_entero(request.form.get('stock_minimo'), minimo=0, maximo=1000000)
+        if None in (nombre, stock_actual, precio_costo, precio_venta, stock_minimo):
+            flash('Datos de producto inválidos.')
+        else:
+            cur.execute("INSERT INTO inventario (nombre, stock_actual, precio_costo, precio_venta, stock_minimo) VALUES (%s, %s, %s, %s, %s)",
+                (nombre, stock_actual, precio_costo, precio_venta, stock_minimo))
+            conn.commit()
     cur.execute("SELECT * FROM inventario ORDER BY id")
     productos = cur.fetchall()
     cur.close()
@@ -470,7 +787,6 @@ def inventario():
 
 
 # --- Registro de Ventas mejorado ---
-from flask import jsonify
 
 # Carrito de productos por habitación en sesión
 @app.route('/ventas', methods=['GET', 'POST'])
@@ -479,7 +795,7 @@ def ventas():
     acceso_negado = validar_acceso('ventas')
     if acceso_negado:
         return acceso_negado
-    
+
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute("SELECT * FROM inventario ORDER BY nombre")
@@ -498,15 +814,20 @@ def ventas():
         session['carrito'] = {}
     carrito = session['carrito']
     if request.method == 'POST':
-        id_habitacion = request.form['id_habitacion']
-        id_producto = request.form.get('id_producto')
-        cantidad = request.form.get('cantidad')
+        # SEGURIDAD: los identificadores deben ser enteros y la cantidad positiva.
+        # Antes una cantidad negativa AUMENTABA el stock y restaba del recaudo.
+        id_hab_num = leer_entero(request.form.get('id_habitacion'), minimo=1)
+        id_habitacion = str(id_hab_num) if id_hab_num else None
+        id_producto = leer_entero(request.form.get('id_producto'), minimo=1)
+        cantidad = leer_entero(request.form.get('cantidad'), minimo=1, maximo=1000)
         accion = request.form.get('accion')
-        if accion == 'agregar_producto' and id_producto and cantidad:
+        if not id_habitacion:
+            mensaje = 'Habitación inválida.'
+        elif accion == 'agregar_producto' and id_producto and cantidad:
             # Agregar producto al carrito
             if id_habitacion not in carrito:
                 carrito[id_habitacion] = []
-            carrito[id_habitacion].append({'id_producto': id_producto, 'cantidad': int(cantidad)})
+            carrito[id_habitacion].append({'id_producto': id_producto, 'cantidad': cantidad})
             session['carrito'] = carrito
             mensaje = 'Producto agregado al carrito.'
         elif accion == 'registrar_venta' and usuario_id:
@@ -567,14 +888,21 @@ def nomina():
     acceso_negado = validar_acceso('nomina')
     if acceso_negado:
         return acceso_negado
-    
+
     return render_template('nomina.html')
 
 @app.route('/api/habitacion_estado/<int:hab_id>', methods=['POST'])
 def api_habitacion_estado(hab_id):
-    data = request.get_json()
+    # SEGURIDAD: esta API no tenía ninguna validación: cualquier persona, sin
+    # iniciar sesión, podía cambiar el estado de las habitaciones.
+    if not (tiene_permiso('ventas') or tiene_permiso('habitaciones')):
+        return jsonify({'ok': False, 'msg': 'No autorizado'}), 403
+    data = request.get_json(silent=True) or {}
     estado = data.get('estado')
     tiempo = data.get('tiempo')
+    # SEGURIDAD: solo se aceptan los estados y tiempos conocidos
+    if estado not in ESTADOS_HABITACION or (tiempo and tiempo not in TIEMPOS_HABITACION):
+        return jsonify({'ok': False, 'msg': 'Estado o tiempo inválido'}), 400
     conn = get_db_connection()
     cur = conn.cursor()
     if tiempo:
@@ -587,6 +915,10 @@ def api_habitacion_estado(hab_id):
     return jsonify({'ok': True})
 
 
+# SEGURIDAD: columnas de usuario que se envían a las plantillas. Se excluye
+# "contrasena" para que el hash nunca llegue al HTML del navegador.
+COLUMNAS_USUARIO_PUBLICAS = "id, documento, nombres, apellidos, rol, celular, correo, estado, funcion, permisos"
+
 # --- PANEL: Crear usuario ---
 @app.route('/usuarios', methods=['GET', 'POST'])
 def usuarios():
@@ -594,46 +926,80 @@ def usuarios():
     acceso_negado = validar_acceso('usuarios')
     if acceso_negado:
         return acceso_negado
-    
+
+    usuario_sesion = obtener_usuario_actual()
     conn = get_db_connection()
     cur = conn.cursor()
     mensaje = None
     if request.method == 'POST':
-        id_usuario = request.form.get('id_usuario')
-        documento = request.form.get('documento')
-        nombres = request.form.get('nombres')
-        apellidos = request.form.get('apellidos')
-        rol = request.form.get('rol')
-        celular = request.form.get('celular')
-        correo = request.form.get('correo')
-        contrasena = request.form.get('contrasena')
+        id_usuario = leer_entero(request.form.get('id_usuario'), minimo=1) if request.form.get('id_usuario') else None
+        # SEGURIDAD: validación de cada campo según los límites de la BD
+        documento = leer_texto(request.form.get('documento'), 20)
+        nombres = leer_texto(request.form.get('nombres'), 100)
+        apellidos = leer_texto(request.form.get('apellidos'), 100)
+        rol = (request.form.get('rol') or '').strip().lower()
+        celular = leer_texto(request.form.get('celular'), 20, requerido=False)
+        correo = leer_texto(request.form.get('correo'), 100)
+        contrasena = request.form.get('contrasena') or ''
         estado = request.form.get('estado') or 'Activo'
-        funcion = request.form.get('funcion')
-        
-        if id_usuario:  # Actualizar
-            # Obtener permisos actuales para no sobrescribir si es colaborador
+        funcion = leer_texto(request.form.get('funcion'), 200, requerido=False)
+
+        usuario_actual = None
+        if id_usuario:
             cur.execute("SELECT permisos, rol FROM usuario WHERE id=%s", (id_usuario,))
             usuario_actual = cur.fetchone()
+
+        errores = []
+        if request.form.get('id_usuario') and not usuario_actual:
+            errores.append('El usuario a editar no existe.')
+        if None in (documento, nombres, apellidos, celular, funcion):
+            errores.append('Revisa los campos: hay datos vacíos o demasiado largos.')
+        if correo is None or not REGEX_CORREO.match(correo):
+            errores.append('Correo inválido.')
+        if rol not in ROLES_VALIDOS:
+            errores.append('Rol inválido.')
+        if estado not in ESTADOS_USUARIO:
+            errores.append('Estado inválido.')
+        # Al crear, la contraseña es obligatoria; al editar, vacía = no cambiarla
+        if (not id_usuario or contrasena) and not (LONGITUD_MINIMA_CONTRASENA <= len(contrasena) <= 128):
+            errores.append(f'La contraseña debe tener entre {LONGITUD_MINIMA_CONTRASENA} y 128 caracteres.')
+        # SEGURIDAD: solo un admin puede crear administradores o modificar a un
+        # admin; así un colaborador con permiso "usuarios" no puede escalar privilegios
+        if not es_admin(usuario_sesion) and (rol == 'admin' or es_admin(usuario_actual)):
+            errores.append('Solo un administrador puede crear o modificar administradores.')
+        # SEGURIDAD: el correo es el usuario de login, no puede repetirse
+        if correo:
+            cur.execute("SELECT id FROM usuario WHERE LOWER(correo) = LOWER(%s) AND id <> %s", (correo, id_usuario or 0))
+            if cur.fetchone():
+                errores.append('Ya existe un usuario con ese correo.')
+
+        if errores:
+            mensaje = ' '.join(errores)
+        elif id_usuario:  # Actualizar
             # Si es admin, asignar todos los permisos; si es colaborador, mantener los que ya tiene
             if rol == 'admin':
-                permisos = 'habitaciones,turnos,inventario,ventas,nomina,usuarios,permisos,aseo'
+                permisos = ','.join(PANELES)
             else:
                 # Mantener permisos existentes si es colaborador
-                permisos = usuario_actual['permisos'] if usuario_actual else ''
-            cur.execute("UPDATE usuario SET documento=%s, nombres=%s, apellidos=%s, rol=%s, celular=%s, correo=%s, contrasena=%s, estado=%s, funcion=%s, permisos=%s WHERE id=%s",
-                (documento, nombres, apellidos, rol, celular, correo, contrasena, estado, funcion, permisos, id_usuario))
+                permisos = usuario_actual['permisos'] or ''
+            cur.execute("UPDATE usuario SET documento=%s, nombres=%s, apellidos=%s, rol=%s, celular=%s, correo=%s, estado=%s, funcion=%s, permisos=%s WHERE id=%s",
+                (documento, nombres, apellidos, rol, celular, correo, estado, funcion, permisos, id_usuario))
+            if contrasena:
+                # SEGURIDAD: la contraseña se guarda cifrada
+                cur.execute("UPDATE usuario SET contrasena=%s WHERE id=%s", (generate_password_hash(contrasena), id_usuario))
+            conn.commit()
             mensaje = 'Usuario actualizado.'
         else:  # Crear
             # Nuevos usuarios colaboradores sin permisos
             if rol == 'admin':
-                permisos = 'habitaciones,turnos,inventario,ventas,nomina,usuarios,permisos,aseo'
+                permisos = ','.join(PANELES)
             else:
                 permisos = ''  # Colaborador sin permisos inicialmente
             cur.execute("INSERT INTO usuario (documento, nombres, apellidos, rol, celular, correo, contrasena, estado, funcion, permisos) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-                (documento, nombres, apellidos, rol, celular, correo, contrasena, estado, funcion, permisos))
+                (documento, nombres, apellidos, rol, celular, correo, generate_password_hash(contrasena), estado, funcion, permisos))
+            conn.commit()
             mensaje = 'Usuario creado.'
-        conn.commit()
-    cur.execute("SELECT * FROM usuario ORDER BY id")
+    cur.execute(f"SELECT {COLUMNAS_USUARIO_PUBLICAS} FROM usuario ORDER BY id")
     usuarios = cur.fetchall()
     cur.close()
     conn.close()
@@ -646,22 +1012,33 @@ def permisos():
     acceso_negado = validar_acceso('permisos')
     if acceso_negado:
         return acceso_negado
-    
+
+    usuario_sesion = obtener_usuario_actual()
     conn = get_db_connection()
     cur = conn.cursor()
     mensaje = None
     if request.method == 'POST':
-        id_usuario = request.form.get('id_usuario')
-        paneles = request.form.getlist('paneles')
-        cur.execute("UPDATE usuario SET permisos=%s WHERE id=%s", (','.join(paneles), id_usuario))
-        conn.commit()
-        mensaje = 'Permisos actualizados.'
-    cur.execute("SELECT * FROM usuario ORDER BY id")
+        id_usuario = leer_entero(request.form.get('id_usuario'), minimo=1)
+        # SEGURIDAD: se descartan paneles que no existan en la lista oficial
+        paneles = [p for p in request.form.getlist('paneles') if p in PANELES]
+        destino = None
+        if id_usuario:
+            cur.execute("SELECT id, rol FROM usuario WHERE id=%s", (id_usuario,))
+            destino = cur.fetchone()
+        if not destino:
+            mensaje = 'Usuario inválido.'
+        # SEGURIDAD: un colaborador no puede cambiar sus propios permisos ni los de un admin
+        elif not es_admin(usuario_sesion) and (es_admin(destino) or destino['id'] == usuario_sesion['id']):
+            mensaje = 'No puedes modificar los permisos de este usuario.'
+        else:
+            cur.execute("UPDATE usuario SET permisos=%s WHERE id=%s", (','.join(paneles), id_usuario))
+            conn.commit()
+            mensaje = 'Permisos actualizados.'
+    cur.execute(f"SELECT {COLUMNAS_USUARIO_PUBLICAS} FROM usuario ORDER BY id")
     usuarios = cur.fetchall()
     cur.close()
     conn.close()
-    paneles = ['habitaciones', 'turnos', 'inventario', 'ventas', 'nomina', 'usuarios', 'permisos', 'aseo']
-    return render_template('permisos.html', usuarios=usuarios, paneles=paneles, mensaje=mensaje)
+    return render_template('permisos.html', usuarios=usuarios, paneles=PANELES, mensaje=mensaje)
 
 # --- PANEL: Aseo general (vacío) ---
 @app.route('/aseo')
@@ -670,8 +1047,8 @@ def aseo():
     acceso_negado = validar_acceso('aseo')
     if acceso_negado:
         return acceso_negado
-    
+
     return render_template('aseo.html')
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(debug=MODO_DEBUG)

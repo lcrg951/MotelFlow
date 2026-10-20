@@ -7,6 +7,24 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
     <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600&family=Playfair+Display:wght@700&display=swap" rel="stylesheet">
     {% block head %}{% endblock %}
+    <!-- SEGURIDAD: token CSRF de la sesión, usado por las peticiones fetch() -->
+    <meta name="csrf-token" content="{{ csrf_token() }}">
+    <script>
+        // SEGURIDAD: agrega automáticamente la cabecera X-CSRFToken a toda petición
+        // fetch() que modifique datos (POST, etc.) dirigida a este mismo servidor.
+        (function () {
+            const token = document.querySelector('meta[name="csrf-token"]').content;
+            const fetchOriginal = window.fetch;
+            window.fetch = function (url, opciones = {}) {
+                const metodo = (opciones.method || 'GET').toUpperCase();
+                const mismoServidor = typeof url === 'string' && url.startsWith('/') && !url.startsWith('//');
+                if (mismoServidor && metodo !== 'GET' && metodo !== 'HEAD') {
+                    opciones.headers = Object.assign({}, opciones.headers, {'X-CSRFToken': token});
+                }
+                return fetchOriginal(url, opciones);
+            };
+        })();
+    </script>
 </head>
 <body>
     <header class="main-header">

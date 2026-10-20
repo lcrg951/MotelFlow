@@ -8,15 +8,15 @@ if defined _OLD_CODEPAGE (
     "%SystemRoot%\System32\chcp.com" 65001 > nul
 )
 
-set "VIRTUAL_ENV=C:\Users\Leydi Delgado\Documents\PGC 1-2026\Codigo\MotelFlow\venv"
+set "VIRTUAL_ENV=C:\Users\Leydi Delgado\OneDrive - UNIVERSIDAD DE CUNDINAMARCA\Documents\entrega PGC ciclo II-02\MotelFlow\venv"
 
 if not defined PROMPT set PROMPT=$P$G
 
 if defined _OLD_VIRTUAL_PROMPT set PROMPT=%_OLD_VIRTUAL_PROMPT%
 if defined _OLD_VIRTUAL_PYTHONHOME set PYTHONHOME=%_OLD_VIRTUAL_PYTHONHOME%
 
-set "_OLD_VIRTUAL_PROMPT=%PROMPT%"
-set "PROMPT=(venv) %PROMPT%"
+if not defined VIRTUAL_ENV_DISABLE_PROMPT set "_OLD_VIRTUAL_PROMPT=%PROMPT%"
+if not defined VIRTUAL_ENV_DISABLE_PROMPT set "PROMPT=(venv) %PROMPT%"
 
 if defined PYTHONHOME set _OLD_VIRTUAL_PYTHONHOME=%PYTHONHOME%
 set PYTHONHOME=

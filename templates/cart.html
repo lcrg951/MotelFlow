@@ -38,6 +38,7 @@
                         {% endif %}
                     </div>
                     <form action="/eliminar/{{ loop.index0 }}" method="post" style="margin:0;">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                         <button type="submit" style="background:#ff4d4d; color:#fff; border:none; border-radius:6px; padding:8px 14px; font-weight:bold; cursor:pointer; margin-left:16px;">Eliminar</button>
                     </form>
                 </li>

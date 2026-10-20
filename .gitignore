@@ -1,0 +1,6 @@
+# SEGURIDAD: credenciales locales, nunca deben subirse al repositorio
+.env
+
+# Archivos generados por Python
+__pycache__/
+*.pyc

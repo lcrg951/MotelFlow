@@ -5,6 +5,24 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}Motel Flow{% endblock %}</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <!-- SEGURIDAD: token CSRF de la sesión, usado por las peticiones fetch() -->
+    <meta name="csrf-token" content="{{ csrf_token() }}">
+    <script>
+        // SEGURIDAD: agrega automáticamente la cabecera X-CSRFToken a toda petición
+        // fetch() que modifique datos (POST, etc.) dirigida a este mismo servidor.
+        (function () {
+            const token = document.querySelector('meta[name="csrf-token"]').content;
+            const fetchOriginal = window.fetch;
+            window.fetch = function (url, opciones = {}) {
+                const metodo = (opciones.method || 'GET').toUpperCase();
+                const mismoServidor = typeof url === 'string' && url.startsWith('/') && !url.startsWith('//');
+                if (mismoServidor && metodo !== 'GET' && metodo !== 'HEAD') {
+                    opciones.headers = Object.assign({}, opciones.headers, {'X-CSRFToken': token});
+                }
+                return fetchOriginal(url, opciones);
+            };
+        })();
+    </script>
 </head>
 <body>
     <header class="main-header-alt">
