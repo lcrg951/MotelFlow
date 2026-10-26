@@ -1,0 +1,144 @@
+{% extends 'header_alt.html' %}
+{% block content %}
+<style>
+    .comprobante-pagina { padding: 24px 16px; max-width: 980px; margin: auto; }
+    .comprobante { width: 100%; border-collapse: collapse; font-family: Calibri, Arial, sans-serif; font-size: 14px; background: #fff; color: #000; }
+    .comprobante td { border: 1px solid #000; padding: 3px 6px; }
+    .comprobante .titulo { background: #9dc3e6; text-align: center; font-weight: bold; font-size: 16px; }
+    .comprobante .gris { background: #d9d9d9; font-weight: bold; text-align: center; }
+    .comprobante .etiqueta { font-weight: bold; }
+    .comprobante .centro { text-align: center; }
+    .comprobante .num { text-align: right; white-space: nowrap; }
+    .comprobante .vacio td { border: none; height: 14px; }
+    .comprobante .firma { height: 60px; vertical-align: bottom; text-align: center; }
+    .comprobante .total td { border-top: 2px solid #000; border-bottom: 2px solid #000; font-weight: bold; }
+    .comprobante-acciones { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0; }
+    .comprobante-acciones form { margin: 0; }
+    .aviso { background: #fff3cd; border: 1px solid #e0c36b; padding: 10px 14px; border-radius: 6px; margin: 10px 0; }
+    @media print {
+        header, footer, .comprobante-acciones, .aviso, .panel-central { display: none !important; }
+        main br { display: none; }
+        .comprobante-pagina { padding: 0; max-width: none; }
+    }
+</style>
+<div class="panel-central">Comprobante de nómina</div>
+<div class="comprobante-pagina">
+    {% for mensaje in get_flashed_messages() %}
+    <div class="aviso">{{ mensaje }}</div>
+    {% endfor %}
+    <div class="comprobante-acciones">
+        <a href="{{ url_for('nomina') }}"><button type="button">Volver a nómina</button></a>
+        <button type="button" onclick="window.print()">Imprimir / Guardar PDF</button>
+        {% if l.estado == 'Borrador' %}
+        <form method="post" action="{{ url_for('nomina_accion', id_liquidacion=l.id, accion='pagar') }}"
+              onsubmit="return confirm('¿Confirmas que este pago ya se realizó? Después no se podrá modificar.')">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit">Marcar pagada</button>
+        </form>
+        <span>Estado: <strong>Borrador</strong></span>
+        {% else %}
+        <span>Estado: <strong>Pagada</strong>{% if fecha_pago %} el {{ fecha_pago.strftime('%d/%m/%Y %H:%M') }}{% endif %}</span>
+        {% endif %}
+    </div>
+
+    <table class="comprobante">
+        <colgroup>
+            <col style="width:22%"><col style="width:11%"><col style="width:11%"><col style="width:11%">
+            <col style="width:11%"><col style="width:11%"><col style="width:11%"><col style="width:12%">
+        </colgroup>
+        <tr><td colspan="8" class="titulo">{{ empresa }}</td></tr>
+        <tr>
+            <td>NOMINA</td>
+            <td class="centro">{{ f.sede }}</td>
+            <td colspan="2" class="centro">Horas Semanales</td>
+            <td class="centro">{{ f.horas_semanales }}</td>
+            <td colspan="3" class="gris">{{ titulo }}</td>
+        </tr>
+        <tr class="vacio"><td colspan="8"></td></tr>
+        <tr>
+            <td class="etiqueta">Nombre</td><td colspan="3" class="centro">{{ (l.nombres ~ ' ' ~ l.apellidos)|upper }}</td>
+            <td colspan="2" class="etiqueta">Periodo Liquidacion</td><td colspan="2" class="centro">{{ periodo }}</td>
+        </tr>
+        <tr>
+            <td class="etiqueta">Identificacion</td><td colspan="3" class="centro">{{ l.documento }}</td>
+            <td colspan="2" class="etiqueta">Cargo</td><td colspan="2" class="centro">{{ f.cargo }}</td>
+        </tr>
+        <tr>
+            <td class="etiqueta">EPS</td><td colspan="3" class="centro">{{ f.eps|upper }}</td>
+            <td colspan="2" class="etiqueta">Fecha Ingreso</td>
+            <td colspan="2" class="centro">{% if f.fecha_ingreso %}{{ f.fecha_ingreso[8:10] }}/{{ f.fecha_ingreso[5:7] }}/{{ f.fecha_ingreso[0:4] }}{% endif %}</td>
+        </tr>
+        <tr>
+            <td class="etiqueta">ARL</td><td colspan="3" class="centro">{{ f.arl|upper }}</td>
+            <td colspan="2" class="etiqueta">Salario</td><td colspan="2" class="num">$ {{ f.salario|pesos }}</td>
+        </tr>
+        <tr>
+            <td class="etiqueta">PENSION</td><td colspan="3" class="centro">{{ f.pension|upper }}</td>
+            <td colspan="2" class="etiqueta">Subsidio Transporte</td><td colspan="2" class="num">$ {{ f.subsidio_transporte|pesos }}</td>
+        </tr>
+        <tr>
+            <td class="etiqueta">C.C.F.</td><td colspan="3" class="centro">{{ f.ccf|upper }}</td>
+            <td colspan="2" class="etiqueta">Recargo Nocturno</td><td colspan="2" class="num">$ {{ f.recargo_nocturno_hora|pesos }}</td>
+        </tr>
+        <tr class="vacio"><td colspan="8"></td></tr>
+        <tr><td colspan="8" class="gris">LIQUIDACION</td></tr>
+        <tr>
+            <td rowspan="2" class="gris">Concepto Liquidado</td>
+            <td rowspan="2" class="gris">Dias</td>
+            <td rowspan="2" class="gris">Horas</td>
+            <td colspan="2" class="gris">Devengado Quincena</td>
+            <td colspan="3" class="gris">Deducciones</td>
+        </tr>
+        <tr>
+            <td class="gris">Valor</td><td class="gris">Detalle</td>
+            <td class="gris">Detalle</td><td class="gris">Porcentaje</td><td class="gris">Valor</td>
+        </tr>
+        {% for i in range(filas) %}
+        {% set dv = d.devengados[i] if i < d.devengados|length else None %}
+        {% set dd = d.deducciones[i] if i < d.deducciones|length else None %}
+        <tr>
+            <td class="etiqueta centro">{{ dv.concepto if dv }}</td>
+            <td class="centro">{{ dv.dias if dv and dv.dias is not none }}</td>
+            <td class="centro">{{ dv.horas if dv and dv.horas is not none and dv.horas != 0 }}</td>
+            <td class="num">{% if dv %}$ {{ dv.valor|pesos }}{% endif %}</td>
+            <td></td>
+            <td class="centro">{{ dd.concepto if dd }}</td>
+            <td class="centro">{{ dd.porcentaje if dd and dd.porcentaje }}</td>
+            <td class="num">{% if dd %}$ {{ dd.valor|pesos }}{% endif %}</td>
+        </tr>
+        {% endfor %}
+        <tr class="total">
+            <td colspan="3" class="gris">TOTAL LIQUIDADO QUINCENA</td>
+            <td class="num">$ {{ d.total_devengado|pesos }}</td>
+            <td colspan="3" class="gris">TOTAL DEDUCCIONES</td>
+            <td class="num">$ {{ d.total_deducciones|pesos }}</td>
+        </tr>
+        <tr class="vacio"><td colspan="8"></td></tr>
+        <tr class="total">
+            <td colspan="7" class="gris">VALOR NETO A CANCELAR QUINCENA</td>
+            <td class="num">$ {{ d.neto|pesos }}</td>
+        </tr>
+        <tr class="vacio"><td colspan="8"></td></tr>
+        <tr>
+            <td class="etiqueta centro">Nota</td>
+            <td colspan="7">{{ d.entrada.nota }}</td>
+        </tr>
+        <tr class="vacio"><td colspan="8"></td></tr>
+        <tr>
+            <td colspan="3" class="etiqueta centro">Empleado: {{ (l.nombres ~ ' ' ~ l.apellidos)|upper }}</td>
+            <td class="vacio" style="border:none"></td>
+            <td colspan="4" class="etiqueta centro">Empleador: {{ empresa|title }}</td>
+        </tr>
+        <tr>
+            <td colspan="3" class="firma">Firma</td>
+            <td style="border:none"></td>
+            <td colspan="4" class="firma">Firma</td>
+        </tr>
+        <tr>
+            <td colspan="2" class="centro">Identificacion</td><td></td>
+            <td style="border:none"></td>
+            <td colspan="2" class="centro">Identificacion</td><td colspan="2"></td>
+        </tr>
+    </table>
+</div>
+{% endblock %}

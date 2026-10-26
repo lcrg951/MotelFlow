@@ -1,11 +1,309 @@
 {% extends 'header_alt.html' %}
 {% block content %}
+<style>
+    .nomina { padding: 24px 16px; max-width: 1200px; margin: auto; }
+    .nomina h2 { margin-top: 32px; }
+    .nomina .tabla-scroll { overflow-x: auto; }
+    .nomina table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    .nomina th, .nomina td { border: 1px solid #999; padding: 6px 8px; text-align: left; white-space: nowrap; }
+    .nomina th { background: #dbe5f1; }
+    .nomina td.num { text-align: right; }
+    .nomina .pendiente { color: #a33; font-style: italic; }
+    .nomina .formulario { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; margin: 12px 0; }
+    .nomina .formulario label { display: flex; flex-direction: column; font-size: 13px; gap: 4px; }
+    .nomina fieldset { border: 1px solid #bbb; border-radius: 8px; padding: 12px 16px; margin: 12px 0; }
+    .nomina .extra { display: grid; grid-template-columns: 2fr 1fr; gap: 8px; margin-bottom: 6px; }
+    .nomina .resumen { background: #f3f3f3; border-radius: 8px; padding: 12px 16px; margin: 12px 0; }
+    .nomina .resumen strong { font-size: 18px; }
+    .nomina .aviso { background: #fff3cd; border: 1px solid #e0c36b; padding: 10px 14px; border-radius: 6px; margin: 10px 0; }
+    .nomina .acciones { display: flex; gap: 6px; flex-wrap: wrap; }
+    .nomina .acciones form { margin: 0; }
+    .nomina .oculto { display: none; }
+</style>
 <div class="panel-central">Gestión de Nómina</div>
-<main>
-    <div style="padding:32px;text-align:center;">
-        <h2>Nómina</h2>
-        <p>Aquí podrás ver y gestionar la nómina de empleados.</p>
-        <!-- Aquí puedes agregar una tabla o resumen de nómina -->
+<div class="nomina">
+    {% for mensaje in get_flashed_messages() %}
+    <div class="aviso">{{ mensaje }}</div>
+    {% endfor %}
+
+    {% if sin_clave %}
+    <div class="aviso">
+        El módulo de nómina está deshabilitado porque falta la clave de cifrado <code>NOMINA_CLAVE</code>
+        en el archivo <code>.env</code> (o en las variables de entorno de Render).
     </div>
-</main>
+    {% else %}
+
+    <!-- ===================== Colaboradoras ===================== -->
+    <h2>Colaboradoras</h2>
+    <div class="tabla-scroll">
+        <table>
+            <tr>
+                <th>Nombre</th><th>Identificación</th><th>Cargo</th><th>EPS</th><th>ARL</th><th>Pensión</th>
+                <th>C.C.F.</th><th>Salario</th><th>Subsidio transporte</th><th>Recargo nocturno (hora)</th>
+                <th>Fecha ingreso</th><th>Horas sem.</th><th>Acciones</th>
+            </tr>
+            {% for e in empleados %}
+            {% set f = e.ficha %}
+            <tr>
+                <td>{{ e.nombre }}</td>
+                <td>{{ e.documento }}</td>
+                {% if f %}
+                <td>{{ f.cargo }}</td><td>{{ f.eps }}</td><td>{{ f.arl }}</td><td>{{ f.pension }}</td><td>{{ f.ccf }}</td>
+                <td class="num">$ {{ f.salario|pesos }}</td>
+                <td class="num">$ {{ f.subsidio_transporte|pesos }}</td>
+                <td class="num">$ {{ f.recargo_nocturno_hora|pesos }}</td>
+                <td>{{ f.fecha_ingreso }}</td>
+                <td class="num">{{ f.horas_semanales }}</td>
+                {% else %}
+                <td colspan="10" class="pendiente">Sin ficha de nómina: haz clic en "Configurar"</td>
+                {% endif %}
+                <td class="acciones">
+                    <button type="button" onclick="configurarFicha({{ e.id }})">Configurar</button>
+                    {% if f %}<button type="button" onclick="nuevaLiquidacion({{ e.id }})">Liquidar</button>{% endif %}
+                </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="13">No hay usuarios activos.</td></tr>
+            {% endfor %}
+        </table>
+    </div>
+
+    <!-- ===================== Ficha de nómina ===================== -->
+    <section id="seccion-ficha" class="oculto">
+        <h2>Ficha de nómina: <span id="ficha-nombre"></span></h2>
+        <form method="post" action="{{ url_for('nomina_ficha') }}" id="form-ficha">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="id_usuario">
+            <div class="formulario">
+                <label>Cargo *<input type="text" name="cargo" maxlength="100" required placeholder="Servicios Generales"></label>
+                <label>Sede<input type="text" name="sede" maxlength="60" placeholder="Ubate"></label>
+                <label>EPS<input type="text" name="eps" maxlength="60"></label>
+                <label>ARL<input type="text" name="arl" maxlength="60"></label>
+                <label>Fondo de pensión<input type="text" name="pension" maxlength="60"></label>
+                <label>Caja de compensación (C.C.F.)<input type="text" name="ccf" maxlength="60"></label>
+                <label>Salario mensual ($)<input type="number" name="salario" min="0" step="1" required></label>
+                <label>Subsidio de transporte mensual ($)<input type="number" name="subsidio_transporte" min="0" step="1" value="0"></label>
+                <label>Recargo nocturno por hora ($)<input type="number" name="recargo_nocturno_hora" min="0" step="0.01" value="0"></label>
+                <label>Fecha de ingreso<input type="date" name="fecha_ingreso"></label>
+                <label>Horas semanales<input type="number" name="horas_semanales" min="1" max="60" value="42" required></label>
+            </div>
+            <button type="submit">Guardar ficha</button>
+            <button type="button" onclick="ocultar('seccion-ficha')">Cancelar</button>
+        </form>
+    </section>
+
+    <!-- ===================== Liquidar quincena ===================== -->
+    <section id="seccion-liquidacion" class="oculto">
+        <h2 id="liq-titulo">Liquidar quincena</h2>
+        <form method="post" action="{{ url_for('nomina_liquidar') }}" id="form-liq">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="id_liquidacion">
+            <div class="formulario">
+                <label>Colaboradora
+                    <select name="id_usuario" required>
+                        {% for e in empleados if e.ficha %}<option value="{{ e.id }}">{{ e.nombre }}</option>{% endfor %}
+                    </select>
+                </label>
+                <label>Periodo desde<input type="date" name="periodo_inicio" required></label>
+                <label>Periodo hasta<input type="date" name="periodo_fin" required></label>
+                <label>&nbsp;
+                    <span class="acciones">
+                        <button type="button" onclick="quincena(1)">1ª quincena</button>
+                        <button type="button" onclick="quincena(2)">2ª quincena</button>
+                    </span>
+                </label>
+            </div>
+
+            <fieldset>
+                <legend>Devengado</legend>
+                <div class="formulario">
+                    <label>Días trabajados<input type="number" name="dias" min="0" max="31" value="15" required></label>
+                    <label>Horas trabajadas<input type="number" name="horas" min="0" max="400" value="84"></label>
+                    <label>Días con auxilio de transporte<input type="number" name="dias_transporte" min="0" max="31" value="15" required></label>
+                    <label>Horas de recargo nocturno<input type="number" name="horas_nocturnas" min="0" max="400" step="0.5" value="0"></label>
+                </div>
+                <p>Otros pagos (bonificaciones, horas extra...):</p>
+                {% for i in range(max_extra) %}
+                <div class="extra">
+                    <input type="text" name="extra_dev_concepto" maxlength="60" placeholder="Concepto">
+                    <input type="number" name="extra_dev_valor" min="0" step="1" placeholder="Valor $">
+                </div>
+                {% endfor %}
+            </fieldset>
+
+            <fieldset>
+                <legend>Deducciones</legend>
+                <p>Salud y pensión (4% cada una sobre el salario del periodo) se calculan solas.</p>
+                <div class="formulario">
+                    <label>Préstamos ($)<input type="number" name="prestamos" min="0" step="1" value="0"></label>
+                    <label>Ausentismo ($)<input type="number" name="ausentismo" min="0" step="1" value="0"></label>
+                    <label>No justificado ($)<input type="number" name="no_justificado" min="0" step="1" value="0"></label>
+                </div>
+                <p>Otros descuentos:</p>
+                {% for i in range(max_extra) %}
+                <div class="extra">
+                    <input type="text" name="extra_ded_concepto" maxlength="60" placeholder="Concepto">
+                    <input type="number" name="extra_ded_valor" min="0" step="1" placeholder="Valor $">
+                </div>
+                {% endfor %}
+            </fieldset>
+
+            <div class="formulario">
+                <label><span><input type="checkbox" name="redondear" value="1" checked> Redondear el neto al siguiente $1.000 (ajuste de nómina automático)</span></label>
+                <label>Ajuste de nómina manual ($)<input type="number" name="ajuste" step="1" value="0"></label>
+                <label>Nota<input type="text" name="nota" maxlength="300"></label>
+            </div>
+
+            <div class="resumen">
+                Vista previa: devengado $ <span id="prev-dev">0</span> · deducciones $ <span id="prev-ded">0</span> ·
+                neto a pagar <strong>$ <span id="prev-neto">0</span></strong>
+                <br><small>El valor definitivo lo calcula el servidor al guardar.</small>
+            </div>
+            <button type="submit">Guardar liquidación</button>
+            <button type="button" onclick="ocultar('seccion-liquidacion')">Cancelar</button>
+        </form>
+    </section>
+
+    <!-- ===================== Historial ===================== -->
+    <h2>Liquidaciones</h2>
+    <div class="tabla-scroll">
+        <table>
+            <tr><th>Colaboradora</th><th>Periodo</th><th>Devengado</th><th>Deducciones</th><th>Neto a pagar</th><th>Estado</th><th>Acciones</th></tr>
+            {% for l in liquidaciones %}
+            <tr>
+                <td>{{ l.nombre }}</td>
+                <td>{{ l.periodo }}</td>
+                {% if l.datos %}
+                <td class="num">$ {{ l.datos.total_devengado|pesos }}</td>
+                <td class="num">$ {{ l.datos.total_deducciones|pesos }}</td>
+                <td class="num"><strong>$ {{ l.datos.neto|pesos }}</strong></td>
+                {% else %}
+                <td colspan="3" class="pendiente">Datos ilegibles</td>
+                {% endif %}
+                <td>{{ l.estado }}{% if l.fecha_pago %} ({{ l.fecha_pago.strftime('%d/%m/%Y') }}){% endif %}</td>
+                <td class="acciones">
+                    <a href="{{ url_for('nomina_comprobante', id_liquidacion=l.id) }}"><button type="button">Ver comprobante</button></a>
+                    {% if l.estado == 'Borrador' and l.datos %}
+                    <button type="button" onclick='editarLiquidacion({{ l.id }}, {{ l.id_usuario }}, {{ l.datos.entrada|tojson }})'>Editar</button>
+                    <form method="post" action="{{ url_for('nomina_accion', id_liquidacion=l.id, accion='pagar') }}"
+                          onsubmit="return confirm('¿Confirmas que este pago ya se realizó? Después no se podrá modificar.')">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <button type="submit">Marcar pagada</button>
+                    </form>
+                    <form method="post" action="{{ url_for('nomina_accion', id_liquidacion=l.id, accion='eliminar') }}"
+                          onsubmit="return confirm('¿Eliminar este borrador?')">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <button type="submit">Eliminar</button>
+                    </form>
+                    {% endif %}
+                </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="7">Todavía no hay liquidaciones.</td></tr>
+            {% endfor %}
+        </table>
+    </div>
+
+    <!-- SEGURIDAD: los datos se insertan como JSON escapado, nunca como código -->
+    <script type="application/json" id="datos-empleados">
+        {{ {'empleados': empleados|map(attribute='id')|list, 'nombres': empleados|map(attribute='nombre')|list, 'fichas': empleados|map(attribute='ficha')|list, 'hoy': hoy.isoformat()}|tojson }}
+    </script>
+    <script>
+        const DATOS = JSON.parse(document.getElementById('datos-empleados').textContent);
+        const EMPLEADOS = {};
+        DATOS.empleados.forEach((id, i) => { EMPLEADOS[id] = {nombre: DATOS.nombres[i], ficha: DATOS.fichas[i]}; });
+        const formFicha = document.getElementById('form-ficha');
+        const formLiq = document.getElementById('form-liq');
+
+        function mostrar(id) {
+            document.querySelectorAll('section').forEach(s => s.classList.add('oculto'));
+            const seccion = document.getElementById(id);
+            seccion.classList.remove('oculto');
+            seccion.scrollIntoView({behavior: 'smooth'});
+        }
+        function ocultar(id) { document.getElementById(id).classList.add('oculto'); }
+
+        function configurarFicha(id) {
+            const e = EMPLEADOS[id];
+            const f = e.ficha || {};
+            formFicha.reset();
+            formFicha.elements.id_usuario.value = id;
+            document.getElementById('ficha-nombre').textContent = e.nombre;
+            ['cargo', 'sede', 'eps', 'arl', 'pension', 'ccf', 'fecha_ingreso', 'horas_semanales'].forEach(c => {
+                if (f[c] !== undefined && f[c] !== null) formFicha.elements[c].value = f[c];
+            });
+            ['salario', 'subsidio_transporte', 'recargo_nocturno_hora'].forEach(c => {
+                if (f[c] !== undefined) formFicha.elements[c].value = Number(f[c]);
+            });
+            mostrar('seccion-ficha');
+        }
+
+        function quincena(numero) {
+            const hoy = new Date(DATOS.hoy + 'T00:00:00');
+            const a = hoy.getFullYear(), m = hoy.getMonth();
+            const dos = n => String(n).padStart(2, '0');
+            const ultimo = new Date(a, m + 1, 0).getDate();
+            formLiq.elements.periodo_inicio.value = `${a}-${dos(m + 1)}-${numero === 1 ? '01' : '16'}`;
+            formLiq.elements.periodo_fin.value = `${a}-${dos(m + 1)}-${numero === 1 ? '15' : dos(ultimo)}`;
+        }
+
+        function prepararLiquidacion(idUsuario, idLiquidacion) {
+            formLiq.reset();
+            formLiq.elements.id_usuario.value = idUsuario;
+            formLiq.elements.id_liquidacion.value = idLiquidacion || '';
+            const ficha = EMPLEADOS[idUsuario].ficha;
+            if (ficha) formLiq.elements.horas.value = ficha.horas_semanales * 2;
+            document.getElementById('liq-titulo').textContent =
+                (idLiquidacion ? 'Editar liquidación: ' : 'Liquidar quincena: ') + EMPLEADOS[idUsuario].nombre;
+        }
+
+        function nuevaLiquidacion(idUsuario) {
+            prepararLiquidacion(idUsuario, null);
+            quincena(new Date(DATOS.hoy + 'T00:00:00').getDate() <= 15 ? 1 : 2);
+            actualizarVistaPrevia();
+            mostrar('seccion-liquidacion');
+        }
+
+        function editarLiquidacion(idLiquidacion, idUsuario, entrada) {
+            prepararLiquidacion(idUsuario, idLiquidacion);
+            ['periodo_inicio', 'periodo_fin', 'dias', 'dias_transporte', 'horas', 'nota'].forEach(c => {
+                formLiq.elements[c].value = entrada[c] ?? '';
+            });
+            ['horas_nocturnas', 'prestamos', 'ausentismo', 'no_justificado', 'ajuste'].forEach(c => {
+                formLiq.elements[c].value = Number(entrada[c]);
+            });
+            formLiq.elements.redondear.checked = entrada.redondear;
+            ['dev', 'ded'].forEach(tipo => {
+                const lista = tipo === 'dev' ? entrada.devengados_extra : entrada.deducciones_extra;
+                const conceptos = formLiq.querySelectorAll(`[name=extra_${tipo}_concepto]`);
+                const valores = formLiq.querySelectorAll(`[name=extra_${tipo}_valor]`);
+                lista.forEach((x, i) => { conceptos[i].value = x.concepto; valores[i].value = Number(x.valor); });
+            });
+            actualizarVistaPrevia();
+            mostrar('seccion-liquidacion');
+        }
+
+        // Misma fórmula que calcular_liquidacion() en app.py, solo para orientar
+        function actualizarVistaPrevia() {
+            const e = EMPLEADOS[formLiq.elements.id_usuario.value];
+            if (!e || !e.ficha) return;
+            const f = e.ficha, v = c => Number(formLiq.elements[c].value) || 0;
+            const suma = nombre => [...formLiq.querySelectorAll(`[name=${nombre}]`)].reduce((t, x) => t + (Number(x.value) || 0), 0);
+            const salarioPeriodo = Number(f.salario) / 30 * v('dias');
+            let dev = salarioPeriodo + Number(f.subsidio_transporte) / 30 * v('dias_transporte')
+                    + Number(f.recargo_nocturno_hora) * v('horas_nocturnas') + suma('extra_dev_valor');
+            const ded = salarioPeriodo * 0.08 + v('prestamos') + v('ausentismo') + v('no_justificado') + suma('extra_ded_valor');
+            const redondear = formLiq.elements.redondear.checked;
+            formLiq.elements.ajuste.disabled = redondear;
+            dev += redondear ? Math.ceil((dev - ded) / 1000) * 1000 - (dev - ded) : v('ajuste');
+            const pesos = n => Math.round(n).toLocaleString('es-CO');
+            document.getElementById('prev-dev').textContent = pesos(dev);
+            document.getElementById('prev-ded').textContent = pesos(ded);
+            document.getElementById('prev-neto').textContent = pesos(dev - ded);
+        }
+        formLiq.addEventListener('input', actualizarVistaPrevia);
+        formLiq.addEventListener('change', actualizarVistaPrevia);
+    </script>
+    {% endif %}
+</div>
 {% endblock %}
