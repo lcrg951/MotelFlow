@@ -1624,7 +1624,9 @@ def permisos():
 #     /api/aseo/estado/<id> y /api/aseo/reasignar/<id>.
 #
 # SEGURIDAD (quién puede hacer qué):
-#   - Ver el tablero: quien tenga el permiso "aseo".
+#   - Ver el tablero: quien tenga el permiso "aseo". El administrador ve el
+#     cronograma y el banco de horas de todas; cada colaboradora ve
+#     únicamente los suyos (el catálogo de actividades sí es común).
 #   - Programar, copiar semanas, reasignar, editar actividades y registrar
 #     devoluciones de horas: SOLO administradores (sin excepciones).
 #   - Marcar actividades: el administrador marca cualquiera; una
@@ -1851,20 +1853,32 @@ def aseo():
     fechas = [lunes + timedelta(days=i) for i in range(7)]
     domingo = fechas[-1]
 
+    # SEGURIDAD: privacidad del cronograma. El administrador ve a todas las
+    # colaboradoras; una colaboradora solo ve SU cronograma, SUS horas y SU
+    # banco de horas. El filtro se aplica en las consultas a la BD (no solo
+    # en la página), así que los datos de las demás nunca llegan a su
+    # navegador. En cada consulta, "(%s OR id_usuario = %s)" significa:
+    # "si es admin, todas las filas; si no, solo las de esta usuaria".
+    ver_todo = es_admin(usuario_sesion)
+    id_sesion = usuario_sesion['id']
+
     conn = get_db_connection()
     asegurar_tablas_aseo(conn)
     cur = conn.cursor()
     actividades = obtener_actividades(cur)
-    cur.execute("SELECT id, nombres, apellidos FROM usuario WHERE estado = 'Activo' ORDER BY nombres, apellidos")
+    cur.execute("""SELECT id, nombres, apellidos FROM usuario
+                   WHERE estado = 'Activo' AND (%s OR id = %s) ORDER BY nombres, apellidos""", (ver_todo, id_sesion))
     usuarios = cur.fetchall()
 
     # Turnos y actividades de la semana, agrupados por (colaboradora, fecha)
-    cur.execute("SELECT * FROM aseo_turno WHERE fecha BETWEEN %s AND %s", (lunes, domingo))
+    cur.execute("SELECT * FROM aseo_turno WHERE fecha BETWEEN %s AND %s AND (%s OR id_usuario = %s)",
+                (lunes, domingo, ver_todo, id_sesion))
     turnos = {(t['id_usuario'], t['fecha']): t for t in cur.fetchall()}
     cur.execute("""SELECT s.id, s.id_usuario, s.fecha, s.id_actividad, s.estado, s.observacion,
                           a.descripcion, a.color
                    FROM aseo_asignacion s JOIN aseo_actividad a ON a.id = s.id_actividad
-                   WHERE s.fecha BETWEEN %s AND %s ORDER BY s.id_actividad""", (lunes, domingo))
+                   WHERE s.fecha BETWEEN %s AND %s AND (%s OR s.id_usuario = %s)
+                   ORDER BY s.id_actividad""", (lunes, domingo, ver_todo, id_sesion))
     asignaciones = {}
     for a in cur.fetchall():
         a['clase'] = clase_estado_aseo(a['estado'], a['fecha'], hoy)
@@ -1908,10 +1922,12 @@ def aseo():
                    FROM aseo_asignacion GROUP BY id_actividad""", (hoy,))
     historial = {h['id_actividad']: h for h in cur.fetchall()}
 
-    # Últimas devoluciones de horas registradas (para poder corregirlas)
+    # Últimas devoluciones de horas registradas (para poder corregirlas).
+    # SEGURIDAD: una colaboradora solo ve las devoluciones que le hicieron a ella
     cur.execute("""SELECT c.id, c.fecha, c.horas, c.tipo, c.nota, u.nombres, u.apellidos
                    FROM aseo_compensacion c JOIN usuario u ON u.id = c.id_usuario
-                   ORDER BY c.fecha DESC, c.id DESC LIMIT 30""")
+                   WHERE (%s OR c.id_usuario = %s)
+                   ORDER BY c.fecha DESC, c.id DESC LIMIT 30""", (ver_todo, id_sesion))
     compensaciones = cur.fetchall()
     cur.close()
     conn.close()
@@ -1932,7 +1948,7 @@ def aseo():
     return render_template('aseo.html', catalogo=catalogo, colaboradoras=colaboradoras, fechas=fechas,
                            dias_semana=DIAS_SEMANA, lunes=lunes, hoy=hoy,
                            semana_anterior=lunes - timedelta(days=7), semana_siguiente=lunes + timedelta(days=7),
-                           es_admin=es_admin(usuario_sesion), id_sesion=usuario_sesion['id'],
+                           es_admin=ver_todo, id_sesion=id_sesion,
                            frecuencias=FRECUENCIAS_ASEO, limite_horas=LIMITE_HORAS_SEMANA,
                            tipos_compensacion=TIPOS_COMPENSACION, compensaciones=compensaciones)
 

@@ -153,7 +153,7 @@
     {% endif %}
 
     <!-- ===================== Navegación de semanas ===================== -->
-    <h2>Semana del {{ fechas[0].strftime('%d/%m') }} al {{ fechas[-1].strftime('%d/%m/%Y') }}</h2>
+    <h2>{{ 'Semana' if es_admin else 'Mi cronograma: semana' }} del {{ fechas[0].strftime('%d/%m') }} al {{ fechas[-1].strftime('%d/%m/%Y') }}</h2>
     <div class="barra">
         <a href="{{ url_for('aseo', semana=semana_anterior.isoformat()) }}"><button type="button">&larr; Semana anterior</button></a>
         <a href="{{ url_for('aseo') }}"><button type="button">Semana actual</button></a>
@@ -301,7 +301,7 @@
     {% endfor %}
 
     <!-- ===================== Banco de horas ===================== -->
-    <h2>Banco de horas</h2>
+    <h2>{{ 'Banco de horas' if es_admin else 'Mi banco de horas' }}</h2>
     <p>Límite legal: {{ limite_horas }} horas por semana. Las horas que pasan de ese límite se acumulan y se devuelven en tiempo o en dinero.</p>
     <div class="tabla-scroll">
         <table>
