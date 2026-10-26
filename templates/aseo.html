@@ -1,10 +1,514 @@
 {% extends 'header_alt.html' %}
 {% block content %}
+<style>
+    .aseo { padding: 24px 16px; max-width: 1200px; margin: auto; }
+    .aseo h2 { margin-top: 28px; }
+    .aseo .tabla-scroll { overflow-x: auto; }
+    .aseo table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    .aseo th, .aseo td { border: 1px solid #888; padding: 4px 6px; text-align: center; }
+    .aseo .aviso { background: #fff3cd; border: 1px solid #e0c36b; padding: 10px 14px; border-radius: 6px; margin: 10px 0; }
+    .aseo .oculto { display: none; }
+
+    /* Catálogo de actividades */
+    .aseo .catalogo th { background: #ffff00; font-size: 16px; }
+    .aseo .catalogo td.desc { text-align: left; }
+    .aseo .catalogo td.frecuencia { font-weight: bold; background: #e7e6e6; }
+    .aseo .control { font-weight: bold; border-radius: 4px; padding: 2px 6px; white-space: nowrap; }
+    .aseo .control.al-dia { background: #c6efce; color: #006100; }
+    .aseo .control.programada { background: #ffeb9c; color: #7a5b00; }
+    .aseo .control.vencida { background: #ffc7ce; color: #9c0006; }
+    .aseo .gestion input[type=text] { width: 100%; box-sizing: border-box; }
+    .aseo .gestion tr.inactiva td { opacity: .55; }
+
+    /* Número de actividad con su color del catálogo */
+    .aseo .num-act { display: inline-block; min-width: 22px; padding: 1px 5px; border: 1px solid #555; border-radius: 3px; font-weight: bold; color: #000; }
+
+    /* Navegación y leyenda */
+    .aseo .barra { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 12px 0; }
+    .aseo .barra form { margin: 0; }
+    .aseo .leyenda { display: flex; gap: 14px; flex-wrap: wrap; font-size: 13px; margin: 8px 0 16px; }
+    .aseo .leyenda span { display: inline-flex; align-items: center; gap: 4px; }
+    .aseo .muestra { width: 16px; height: 16px; border: 1px solid #555; display: inline-block; }
+
+    /* Cronograma semanal */
+    .aseo .semana { margin-bottom: 22px; }
+    .aseo .semana th { background: #d9e1f2; }
+    .aseo .semana th.hoy { background: #ffff00; }
+    .aseo .semana .nombre { writing-mode: vertical-rl; transform: rotate(180deg); font-weight: bold; background: #ddebf7; width: 34px; }
+    .aseo .semana .rotulo { font-weight: bold; background: #f2f2f2; width: 60px; }
+    .aseo .semana .turno { background: #c6e0b4; }
+    .aseo .semana .descanso { background: #00b0f0; color: #000; font-weight: bold; font-size: 12px; }
+    .aseo .semana .total { font-weight: bold; font-size: 22px; width: 110px; }
+    .aseo .semana .total.excedida { background: #ffc7ce; color: #9c0006; }
+    .aseo .semana .banco { font-size: 12px; width: 110px; }
+    .aseo .actividades { display: flex; flex-direction: column; gap: 3px; align-items: stretch; min-width: 70px; }
+
+    /* Colores de estado de cada actividad asignada */
+    .aseo .chip { border: 2px solid #555; border-radius: 4px; padding: 2px 4px; font-size: 13px; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 4px; background: #fff; }
+    .aseo .chip[disabled] { cursor: default; }
+    .aseo .chip.pendiente { background: #ffffff; }
+    .aseo .chip.realizada { background: #63be7b; border-color: #2e7d32; }
+    .aseo .chip.no-realizada { background: #f8696b; border-color: #b71c1c; }
+    .aseo .chip.sin-reportar { background: #ffc000; border-color: #b26a00; }
+    .aseo .chip .icono { font-weight: bold; }
+
+    /* Ventana para marcar o reasignar una actividad */
+    .aseo .marcador { position: fixed; inset: 0; background: rgba(0,0,0,.35); display: none; align-items: center; justify-content: center; z-index: 50; }
+    .aseo .marcador.abierto { display: flex; }
+    .aseo .marcador .caja { background: #fff; border-radius: 10px; padding: 18px; max-width: 380px; width: calc(100% - 32px); max-height: 90vh; overflow-y: auto; }
+    .aseo .marcador .botones { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+    .aseo .marcador input, .aseo .marcador select { width: 100%; box-sizing: border-box; }
+    .aseo .marcador fieldset { margin-top: 14px; border: 1px solid #ccc; border-radius: 6px; }
+
+    /* Formulario para programar la semana */
+    .aseo .programar { display: none; margin: 8px 0 24px; padding: 12px; border: 1px solid #bbb; border-radius: 8px; background: #fafafa; }
+    .aseo .programar.abierto { display: block; }
+    .aseo .programar input[type=text] { width: 70px; }
+    .aseo .programar input[type=number] { width: 55px; }
+    .aseo .programar .checks { display: grid; grid-template-columns: repeat(4, auto); gap: 2px 6px; justify-content: center; }
+    .aseo .programar .checks label { display: flex; align-items: center; gap: 2px; font-size: 12px; }
+    .aseo .programar .total-form { font-weight: bold; }
+    .aseo .programar .total-form.excedida { color: #9c0006; }
+
+    /* Banco de horas */
+    .aseo .saldo-positivo { color: #9c0006; font-weight: bold; }
+    .aseo .formulario { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; margin: 10px 0; }
+    .aseo .formulario label { display: flex; flex-direction: column; font-size: 13px; gap: 4px; }
+</style>
 <div class="panel-central">Aseo General</div>
-<main>
-    <div style="padding:32px;max-width:700px;margin:auto;">
-        <h2>Panel de Aseo General</h2>
-        <p>En construcción...</p>
+<div class="aseo">
+    {% for mensaje in get_flashed_messages() %}
+    <div class="aviso">{{ mensaje }}</div>
+    {% endfor %}
+
+    <!-- ===================== Catálogo de actividades ===================== -->
+    {% set activas = catalogo|selectattr('activa')|list %}
+    <div class="tabla-scroll">
+        <table class="catalogo">
+            <tr><th colspan="5">ACTIVIDADES</th></tr>
+            <tr><th>Frecuencia</th><th>Actividad</th><th>Descripción</th><th>Última vez realizada</th><th>Control</th></tr>
+            {% for a in activas|sort(attribute='frecuencia_dias') %}
+            <tr>
+                <td class="frecuencia">{{ a.frecuencia|upper }}</td>
+                <td><span class="num-act" style="background:{{ a.color }}">Actividad {{ a.id }}</span></td>
+                <td class="desc">{{ a.descripcion }}</td>
+                <td>{{ a.ultima.strftime('%d/%m/%Y') if a.ultima else '—' }}</td>
+                <td><span class="control {{ a.control[0] }}">{{ a.control[1] }}</span></td>
+            </tr>
+            {% else %}
+            <tr><td colspan="5">No hay actividades activas.</td></tr>
+            {% endfor %}
+        </table>
     </div>
-</main>
+
+    {% if es_admin %}
+    <p><button type="button" onclick="document.getElementById('gestion').classList.toggle('oculto')">Administrar actividades</button></p>
+    <!-- Edición del catálogo (solo admin). Cada fila es un formulario: los
+         campos se enlazan a él con el atributo form="..." -->
+    <div id="gestion" class="tabla-scroll oculto">
+        <table class="gestion">
+            <tr><th>N.º</th><th>Descripción</th><th>Frecuencia</th><th>Color</th><th>Activa</th><th></th></tr>
+            {% for a in catalogo %}
+            <tr class="{{ 'inactiva' if not a.activa }}">
+                <td><span class="num-act" style="background:{{ a.color }}">{{ a.id }}</span></td>
+                <td><input type="text" name="descripcion" form="act-{{ a.id }}" value="{{ a.descripcion }}" maxlength="200" required></td>
+                <td>
+                    <select name="frecuencia" form="act-{{ a.id }}">
+                        {% for nombre in frecuencias %}<option value="{{ nombre }}" {% if nombre == a.frecuencia %}selected{% endif %}>{{ nombre }}</option>{% endfor %}
+                    </select>
+                </td>
+                <td><input type="color" name="color" form="act-{{ a.id }}" value="{{ a.color }}"></td>
+                <td><input type="checkbox" name="activa" value="1" form="act-{{ a.id }}" {% if a.activa %}checked{% endif %}></td>
+                <td>
+                    <form method="post" action="{{ url_for('aseo_actividad') }}" id="act-{{ a.id }}">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <input type="hidden" name="id_actividad" value="{{ a.id }}">
+                        <input type="hidden" name="semana" value="{{ lunes.isoformat() }}">
+                        <button type="submit">Guardar</button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+            <tr>
+                <td>Nueva</td>
+                <td><input type="text" name="descripcion" form="act-nueva" maxlength="200" placeholder="Descripción de la nueva actividad" required></td>
+                <td>
+                    <select name="frecuencia" form="act-nueva">
+                        {% for nombre in frecuencias %}<option value="{{ nombre }}" {% if nombre == 'Semanal' %}selected{% endif %}>{{ nombre }}</option>{% endfor %}
+                    </select>
+                </td>
+                <td><input type="color" name="color" form="act-nueva" value="#d9d9d9"></td>
+                <td></td>
+                <td>
+                    <form method="post" action="{{ url_for('aseo_actividad') }}" id="act-nueva">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <input type="hidden" name="semana" value="{{ lunes.isoformat() }}">
+                        <button type="submit">Agregar</button>
+                    </form>
+                </td>
+            </tr>
+        </table>
+        <p><small>Las actividades no se borran: desmarca "Activa" para ocultarla sin perder su historial.</small></p>
+    </div>
+    {% endif %}
+
+    <!-- ===================== Navegación de semanas ===================== -->
+    <h2>Semana del {{ fechas[0].strftime('%d/%m') }} al {{ fechas[-1].strftime('%d/%m/%Y') }}</h2>
+    <div class="barra">
+        <a href="{{ url_for('aseo', semana=semana_anterior.isoformat()) }}"><button type="button">&larr; Semana anterior</button></a>
+        <a href="{{ url_for('aseo') }}"><button type="button">Semana actual</button></a>
+        <a href="{{ url_for('aseo', semana=semana_siguiente.isoformat()) }}"><button type="button">Semana siguiente &rarr;</button></a>
+        {% if es_admin %}
+        <form method="post" action="{{ url_for('aseo_copiar') }}"
+              onsubmit="return confirm('¿Copiar los turnos y actividades de la semana anterior a esta semana? Lo que ya esté programado no se cambia.')">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="semana" value="{{ lunes.isoformat() }}">
+            <button type="submit">Copiar semana anterior</button>
+        </form>
+        {% endif %}
+    </div>
+    <div class="leyenda">
+        <span><i class="muestra" style="background:#63be7b"></i> ✓ Realizada</span>
+        <span><i class="muestra" style="background:#f8696b"></i> ✗ No realizada</span>
+        <span><i class="muestra" style="background:#ffc000"></i> ! Sin reportar (el día ya pasó)</span>
+        <span><i class="muestra" style="background:#fff"></i> Pendiente</span>
+        <span><i class="muestra" style="background:#00b0f0"></i> Descanso</span>
+        <span><i class="muestra" style="background:#ffc7ce"></i> Más de {{ limite_horas }} horas</span>
+        <span>Haz clic en una actividad para marcarla{% if es_admin %} o reasignarla{% endif %}.</span>
+    </div>
+
+    <!-- ===================== Cronograma por colaboradora ===================== -->
+    {% for c in colaboradoras %}
+    <div class="tabla-scroll semana">
+        <table>
+            <tr>
+                <td rowspan="5" class="nombre">{{ c.nombre|upper }}</td>
+                <td class="rotulo"></td>
+                {% for f in fechas %}
+                <th class="{{ 'hoy' if f == hoy }}">{{ dias_semana[loop.index0] }} {{ f.day }}</th>
+                {% endfor %}
+                <th>Horas semana</th>
+            </tr>
+            <tr>
+                <td class="rotulo">Turno</td>
+                {% for d in c.dias %}
+                <td class="{{ 'descanso' if d.descanso else ('turno' if d.turno) }}">{{ d.turno }}</td>
+                {% endfor %}
+                <td rowspan="2" class="total {{ 'excedida' if c.exceso }}">
+                    {{ c.horas_semana|horas }}
+                    {% if c.exceso %}<br><small>+{{ c.exceso|horas }} extra</small>{% endif %}
+                </td>
+            </tr>
+            <tr>
+                <td class="rotulo">Horas</td>
+                {% for d in c.dias %}<td>{{ d.horas|horas }}</td>{% endfor %}
+            </tr>
+            <tr>
+                <td class="rotulo">Act</td>
+                {% for d in c.dias %}
+                {% if d.descanso %}
+                <td class="descanso">DESCANSO</td>
+                {% else %}
+                <td>
+                    <div class="actividades">
+                        {% for a in d.actividades %}
+                        {% set puede_marcar = es_admin or c.id == id_sesion %}
+                        <button type="button" class="chip {{ a.clase }}" data-id="{{ a.id }}"
+                                data-estado="{{ a.estado }}" data-observacion="{{ a.observacion }}"
+                                data-usuario="{{ c.id }}" data-fecha="{{ d.fecha.isoformat() }}"
+                                data-actividad="Actividad {{ a.id_actividad }}: {{ a.descripcion }}"
+                                title="{{ a.descripcion }} — {{ a.estado }}{{ ': ' ~ a.observacion if a.observacion }}"
+                                {% if not puede_marcar %}disabled{% endif %}>
+                            <span class="num-act" style="background:{{ a.color }}">{{ a.id_actividad }}</span>
+                            <span class="icono">{{ {'realizada': '✓', 'no-realizada': '✗', 'sin-reportar': '!'}.get(a.clase, '') }}</span>
+                        </button>
+                        {% endfor %}
+                    </div>
+                </td>
+                {% endif %}
+                {% endfor %}
+                <td rowspan="2" class="banco">
+                    {% if c.total %}{{ c.realizadas }} de {{ c.total }} realizadas<br>{% endif %}
+                    Banco: <span class="{{ 'saldo-positivo' if c.banco.saldo > 0 }}">{{ c.banco.saldo|horas }} h</span>
+                </td>
+            </tr>
+            <tr>
+                <td class="rotulo"></td>
+                <td colspan="7" style="text-align:left">
+                    {% if es_admin %}
+                    <button type="button" onclick="document.getElementById('programar-{{ c.id }}').classList.toggle('abierto')">Programar / modificar semana</button>
+                    {% endif %}
+                </td>
+            </tr>
+        </table>
+    </div>
+
+    {% if es_admin %}
+    <!-- Formulario para programar o corregir la semana de esta colaboradora (solo admin) -->
+    <form method="post" action="{{ url_for('aseo_programar') }}" class="programar tabla-scroll" id="programar-{{ c.id }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="semana" value="{{ lunes.isoformat() }}">
+        <input type="hidden" name="id_usuario" value="{{ c.id }}">
+        <strong>Semana de {{ c.nombre }}</strong>
+        <table>
+            <tr>
+                <th></th>
+                {% for f in fechas %}<th>{{ dias_semana[loop.index0] }} {{ f.day }}</th>{% endfor %}
+                <th>Total</th>
+            </tr>
+            <tr>
+                <td>Turno</td>
+                {% for d in c.dias %}<td><input type="text" name="turno_{{ loop.index0 }}" class="campo-turno" maxlength="20" value="{{ d.turno }}" placeholder="6-2"></td>{% endfor %}
+                <td rowspan="2" class="total-form"></td>
+            </tr>
+            <tr>
+                <td>Horas</td>
+                {% for d in c.dias %}<td><input type="number" name="horas_{{ loop.index0 }}" class="campo-horas" min="0" max="24" step="0.5" value="{{ d.horas|horas }}"></td>{% endfor %}
+            </tr>
+            <tr>
+                <td>Descanso</td>
+                {% for d in c.dias %}<td><input type="checkbox" name="descanso_{{ loop.index0 }}" class="campo-descanso" value="1" {% if d.descanso %}checked{% endif %}></td>{% endfor %}
+                <td></td>
+            </tr>
+            <tr>
+                <td>Actividades</td>
+                {% for d in c.dias %}
+                {% set i = loop.index0 %}
+                {% set asignadas = d.actividades|map(attribute='id_actividad')|list %}
+                <td>
+                    <div class="checks">
+                        {% for a in catalogo if a.activa or a.id in asignadas %}
+                        <label title="{{ a.descripcion }}">
+                            <input type="checkbox" name="act_{{ i }}" value="{{ a.id }}" {% if a.id in asignadas %}checked{% endif %}>
+                            <span class="num-act" style="background:{{ a.color }}">{{ a.id }}</span>
+                        </label>
+                        {% endfor %}
+                    </div>
+                </td>
+                {% endfor %}
+                <td></td>
+            </tr>
+        </table>
+        <p><small>
+            Escribe el turno y las horas se calculan solas ("6-2" = 8, "12-10" = 10). Para turnos de 12 horas o más usa a/p:
+            "6a-4p" = 10, "4p-6a" = 14. Escribe "N" para descanso. Quitar una actividad borra también su estado.
+        </small></p>
+        <button type="submit">Guardar semana</button>
+    </form>
+    {% endif %}
+    {% else %}
+    <p>No hay colaboradoras activas.</p>
+    {% endfor %}
+
+    <!-- ===================== Banco de horas ===================== -->
+    <h2>Banco de horas</h2>
+    <p>Límite legal: {{ limite_horas }} horas por semana. Las horas que pasan de ese límite se acumulan y se devuelven en tiempo o en dinero.</p>
+    <div class="tabla-scroll">
+        <table>
+            <tr><th>Colaboradora</th><th>Horas extra acumuladas</th><th>Horas devueltas</th><th>Saldo pendiente</th></tr>
+            {% for c in colaboradoras %}
+            <tr>
+                <td style="text-align:left">{{ c.nombre }}</td>
+                <td>{{ c.banco.extra|horas }}</td>
+                <td>{{ c.banco.compensadas|horas }}</td>
+                <td class="{{ 'saldo-positivo' if c.banco.saldo > 0 }}">{{ c.banco.saldo|horas }}</td>
+            </tr>
+            {% endfor %}
+        </table>
+    </div>
+
+    {% if es_admin %}
+    <form method="post" action="{{ url_for('aseo_compensar') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="semana" value="{{ lunes.isoformat() }}">
+        <strong>Registrar devolución de horas</strong>
+        <div class="formulario">
+            <label>Colaboradora
+                <select name="id_usuario" required>
+                    {% for c in colaboradoras %}<option value="{{ c.id }}">{{ c.nombre }} (saldo {{ c.banco.saldo|horas }} h)</option>{% endfor %}
+                </select>
+            </label>
+            <label>Fecha<input type="date" name="fecha" value="{{ hoy.isoformat() }}" required></label>
+            <label>Horas<input type="number" name="horas" min="0.5" max="500" step="0.5" required></label>
+            <label>Devuelta en
+                <select name="tipo">{% for t in tipos_compensacion %}<option>{{ t }}</option>{% endfor %}</select>
+            </label>
+            <label>Nota<input type="text" name="nota" maxlength="200" placeholder="Ej.: día libre el 20/10"></label>
+        </div>
+        <button type="submit">Registrar devolución</button>
+    </form>
+    {% endif %}
+
+    {% if compensaciones %}
+    <h3>Devoluciones registradas</h3>
+    <div class="tabla-scroll">
+        <table>
+            <tr><th>Fecha</th><th>Colaboradora</th><th>Horas</th><th>Tipo</th><th>Nota</th>{% if es_admin %}<th></th>{% endif %}</tr>
+            {% for d in compensaciones %}
+            <tr>
+                <td>{{ d.fecha.strftime('%d/%m/%Y') }}</td>
+                <td style="text-align:left">{{ d.nombres }} {{ d.apellidos }}</td>
+                <td>{{ d.horas|horas }}</td>
+                <td>{{ d.tipo }}</td>
+                <td style="text-align:left">{{ d.nota }}</td>
+                {% if es_admin %}
+                <td>
+                    <form method="post" action="{{ url_for('aseo_compensacion_eliminar', id_compensacion=d.id) }}"
+                          onsubmit="return confirm('¿Eliminar esta devolución? Las horas vuelven al saldo.')">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <input type="hidden" name="semana" value="{{ lunes.isoformat() }}">
+                        <button type="submit">Eliminar</button>
+                    </form>
+                </td>
+                {% endif %}
+            </tr>
+            {% endfor %}
+        </table>
+    </div>
+    {% endif %}
+
+    <!-- ===================== Ventana para marcar / reasignar una actividad ===================== -->
+    <div class="marcador" id="marcador">
+        <div class="caja">
+            <strong id="marcador-titulo"></strong>
+            <p>Estado actual: <span id="marcador-estado"></span></p>
+            <label>Observación (opcional)
+                <input type="text" id="marcador-observacion" maxlength="200" placeholder="Ej.: faltó hipoclorito">
+            </label>
+            <div class="botones">
+                <button type="button" onclick="marcar('Realizada')">✓ Realizada</button>
+                <button type="button" onclick="marcar('No realizada')">✗ No realizada</button>
+                <button type="button" onclick="marcar('Pendiente')">Pendiente</button>
+                <button type="button" onclick="cerrarMarcador()">Cancelar</button>
+            </div>
+            {% if es_admin %}
+            <!-- Percances: pasar la actividad a otra colaboradora u otro día (solo admin) -->
+            <fieldset>
+                <legend>Reasignar (percances)</legend>
+                <label>Colaboradora
+                    <select id="reasignar-usuario">
+                        {% for c in colaboradoras %}<option value="{{ c.id }}">{{ c.nombre }}</option>{% endfor %}
+                    </select>
+                </label>
+                <label>Día
+                    <select id="reasignar-fecha">
+                        {% for f in fechas %}<option value="{{ f.isoformat() }}">{{ dias_semana[loop.index0] }} {{ f.strftime('%d/%m') }}</option>{% endfor %}
+                    </select>
+                </label>
+                <div class="botones"><button type="button" onclick="reasignar()">Reasignar</button></div>
+            </fieldset>
+            {% endif %}
+            <p id="marcador-error" style="color:#b71c1c"></p>
+        </div>
+    </div>
+
+    <script>
+        // Íconos que acompañan a cada color de estado
+        const ICONOS = {'realizada': '✓', 'no-realizada': '✗', 'sin-reportar': '!', 'pendiente': ''};
+        const LIMITE_HORAS = {{ limite_horas|float }};
+        const marcador = document.getElementById('marcador');
+        let chipActual = null;
+
+        // Abre la ventana al hacer clic en una actividad (solo si se puede marcar)
+        document.querySelectorAll('.chip:not([disabled])').forEach(chip => {
+            chip.addEventListener('click', () => {
+                chipActual = chip;
+                document.getElementById('marcador-titulo').textContent = chip.dataset.actividad;
+                document.getElementById('marcador-estado').textContent = chip.dataset.estado;
+                document.getElementById('marcador-observacion').value = chip.dataset.observacion;
+                document.getElementById('marcador-error').textContent = '';
+                const usuario = document.getElementById('reasignar-usuario');
+                if (usuario) {
+                    usuario.value = chip.dataset.usuario;
+                    document.getElementById('reasignar-fecha').value = chip.dataset.fecha;
+                }
+                marcador.classList.add('abierto');
+            });
+        });
+
+        function cerrarMarcador() { marcador.classList.remove('abierto'); }
+
+        // Envía datos al servidor y devuelve la respuesta (o un error de conexión)
+        async function enviar(url, cuerpo) {
+            const respuesta = await fetch(url, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(cuerpo)
+            });
+            return respuesta.json().catch(() => ({ok: false, msg: 'Error de conexión'}));
+        }
+
+        // Cambia el estado de la actividad y la repinta con su color
+        async function marcar(estado) {
+            const observacion = document.getElementById('marcador-observacion').value;
+            const datos = await enviar(`/api/aseo/estado/${chipActual.dataset.id}`, {estado, observacion});
+            if (!datos.ok) {
+                document.getElementById('marcador-error').textContent = datos.msg;
+                return;
+            }
+            chipActual.classList.remove('pendiente', 'realizada', 'no-realizada', 'sin-reportar');
+            chipActual.classList.add(datos.clase);
+            chipActual.querySelector('.icono').textContent = ICONOS[datos.clase];
+            chipActual.dataset.estado = datos.estado;
+            chipActual.dataset.observacion = datos.observacion;
+            chipActual.title = chipActual.dataset.actividad + ' — ' + datos.estado + (datos.observacion ? ': ' + datos.observacion : '');
+            cerrarMarcador();
+        }
+
+        // Pasa la actividad a otra colaboradora u otro día y recarga el cronograma
+        async function reasignar() {
+            const datos = await enviar(`/api/aseo/reasignar/${chipActual.dataset.id}`, {
+                id_usuario: document.getElementById('reasignar-usuario').value,
+                fecha: document.getElementById('reasignar-fecha').value
+            });
+            if (!datos.ok) {
+                document.getElementById('marcador-error').textContent = datos.msg;
+                return;
+            }
+            location.reload();
+        }
+
+        // Misma regla que horas_de_turno() en app.py: calcula las horas del turno
+        function horasDeTurno(texto) {
+            const m = /^\s*(\d{1,2})(?::(\d{2}))?\s*([ap])?\s*-\s*(\d{1,2})(?::(\d{2}))?\s*([ap])?\s*$/i.exec(texto || '');
+            if (!m) return null;
+            const h1 = +m[1], m1 = +(m[2] || 0), h2 = +m[4], m2 = +(m[5] || 0);
+            if (m[3] && m[6]) {
+                const ini = ((h1 % 12) + (m[3].toLowerCase() === 'p' ? 12 : 0)) * 60 + m1;
+                const fin = ((h2 % 12) + (m[6].toLowerCase() === 'p' ? 12 : 0)) * 60 + m2;
+                return (((fin - ini) % 1440 + 1440) % 1440 || 1440) / 60;
+            }
+            return ((((h2 * 60 + m2) - (h1 * 60 + m1)) % 720 + 720) % 720 || 720) / 60;
+        }
+
+        // En cada formulario de programación: calcula horas al escribir el turno,
+        // marca descanso con "N" y muestra el total con alerta si pasa de 42
+        document.querySelectorAll('form.programar').forEach(form => {
+            const turnos = form.querySelectorAll('.campo-turno');
+            const horas = form.querySelectorAll('.campo-horas');
+            const descansos = form.querySelectorAll('.campo-descanso');
+            const total = form.querySelector('.total-form');
+            function actualizarTotal() {
+                const suma = [...horas].reduce((t, h, i) => t + (descansos[i].checked ? 0 : (Number(h.value) || 0)), 0);
+                total.textContent = suma + ' h' + (suma > LIMITE_HORAS ? ` (+${suma - LIMITE_HORAS} extra)` : '');
+                total.classList.toggle('excedida', suma > LIMITE_HORAS);
+            }
+            turnos.forEach((campo, i) => campo.addEventListener('input', () => {
+                const texto = campo.value.trim().toUpperCase();
+                if (texto === 'N' || texto === 'DESCANSO') {
+                    descansos[i].checked = true;
+                    horas[i].value = 0;
+                } else {
+                    descansos[i].checked = false;
+                    const calculadas = horasDeTurno(campo.value);
+                    if (calculadas !== null) horas[i].value = calculadas;
+                }
+                actualizarTotal();
+            }));
+            horas.forEach(h => h.addEventListener('input', actualizarTotal));
+            descansos.forEach(d => d.addEventListener('change', actualizarTotal));
+            actualizarTotal();
+        });
+    </script>
+</div>
 {% endblock %}

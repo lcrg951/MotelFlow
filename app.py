@@ -1597,7 +1597,247 @@ def permisos():
     conn.close()
     return render_template('permisos.html', usuarios=usuarios, paneles=PANELES, mensaje=mensaje)
 
-# --- PANEL: Aseo general (vacío) ---
+# =====================================================================
+# MÓDULO: Aseo general (cronograma semanal, actividades y banco de horas)
+# ---------------------------------------------------------------------
+# El aseo general agrupa todas las actividades de limpieza y mantenimiento
+# del establecimiento. Todo se guarda en la BD (Neon) y se puede modificar
+# desde el aplicativo:
+#   - Actividades: el administrador las crea, edita (descripción,
+#     frecuencia, color) o desactiva. Al principio se cargan las 8 del Excel.
+#   - Cronograma: cada semana (lunes a domingo) el administrador programa a
+#     cada colaboradora su turno, horas, descansos y actividades del día.
+#     Las horas se calculan solas a partir del turno ("6-2" = 8 horas).
+#   - Percances: una actividad se puede reasignar a otra colaboradora u
+#     otro día, y cualquier semana (incluso pasada) se puede volver a editar.
+#   - Seguimiento: cada actividad se marca como Realizada o No realizada y
+#     se pinta de color (verde, rojo, naranja si nadie la reportó).
+#   - Banco de horas: la ley colombiana permite 42 horas a la semana. Las
+#     horas que pasan de 42 se acumulan para devolverlas en tiempo o en
+#     dinero; el administrador registra cada devolución y se ve el saldo.
+#
+# Resumen de lo que se agregó para este módulo:
+#   - Tablas en la BD: aseo_actividad, aseo_turno, aseo_asignacion y
+#     aseo_compensacion.
+#   - Rutas: /aseo (tablero), /aseo/programar, /aseo/copiar,
+#     /aseo/actividad, /aseo/compensar, /aseo/compensacion/<id>/eliminar,
+#     /api/aseo/estado/<id> y /api/aseo/reasignar/<id>.
+#
+# SEGURIDAD (quién puede hacer qué):
+#   - Ver el tablero: quien tenga el permiso "aseo".
+#   - Programar, copiar semanas, reasignar, editar actividades y registrar
+#     devoluciones de horas: SOLO administradores (sin excepciones).
+#   - Marcar actividades: el administrador marca cualquiera; una
+#     colaboradora solo marca las suyas.
+#   - Nadie puede marcar como hecha una actividad de un día que no ha llegado.
+# =====================================================================
+
+# Frecuencias que se pueden elegir para una actividad y cada cuántos días
+# debe repetirse (se usa para avisar cuando una actividad está vencida)
+FRECUENCIAS_ASEO = {'Diaria': 1, 'Semanal': 7, 'Quincenal': 15, 'Mensual': 30,
+                    'Cada 2 meses': 60, 'Cada 3 meses': 90, 'Semestral': 180}
+
+# Actividades iniciales (tabla "ACTIVIDADES" del Excel): (número, frecuencia,
+# color, descripción). Solo se usan la primera vez, para llenar la tabla
+# aseo_actividad cuando está vacía; después se modifican desde el aplicativo.
+ACTIVIDADES_ASEO_INICIALES = [
+    (1, 'Semanal', '#bfbfbf', 'Aseo Diario, quemar basura, llenar tanques agua, cunetas, vías, telarañas'),
+    (2, 'Semanal', '#8ea9db', 'Vidrios bodega, recepción, lavandería, habitaciones, Hipoclorito, limpiapisos'),
+    (3, 'Semanal', '#f4b084', 'Aseo General (recepción, pasillo, lavandería), aseo parqueaderos'),
+    (4, 'Semanal', '#92d050', 'Limpieza de lavadoras'),
+    (5, 'Mensual', '#ffd966', 'Cloro tanques, Bacterias'),
+    (6, 'Cada 2 meses', '#fff2cc', 'Limpieza Albercas'),
+    (7, 'Cada 2 meses', '#ffff00', 'Aseo General Habitaciones'),
+    (8, 'Cada 2 meses', '#00ffff', 'Aseo General de lavadoras'),
+]
+# SEGURIDAD: únicos estados que se aceptan al marcar una actividad
+ESTADOS_ASEO = ('Pendiente', 'Realizada', 'No realizada')
+DIAS_SEMANA = ('Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom')
+# Máximo de horas semanales permitido en Colombia; lo que pase se acumula
+LIMITE_HORAS_SEMANA = Decimal('42')
+# Formas de devolver las horas acumuladas
+TIPOS_COMPENSACION = ('Tiempo', 'Dinero')
+# Lo que se escribe en "Turno" para indicar un día de descanso
+TURNOS_DESCANSO = ('N', 'DESCANSO')
+# SEGURIDAD: el color se inserta en el HTML, por eso solo se acepta el
+# formato exacto "#rrggbb" (evita que se cuele código en la página)
+REGEX_COLOR = re.compile(r'^#[0-9a-fA-F]{6}$')
+# Formato de un turno: "6-2", "10p-6a", "6:30a-2:30p"...
+REGEX_TURNO = re.compile(r'^\s*(\d{1,2})(?::(\d{2}))?\s*([ap])?\s*-\s*(\d{1,2})(?::(\d{2}))?\s*([ap])?\s*$', re.IGNORECASE)
+
+# Indica si ya se revisó que existan las tablas de aseo (una vez por arranque)
+_tablas_aseo_listas = False
+
+# Crea las tablas de aseo en Neon si todavía no existen y las actualiza.
+#   - aseo_actividad: catálogo de actividades (descripción, frecuencia,
+#     color). "activa = FALSE" la oculta sin borrar su historial.
+#   - aseo_turno: una fila por colaboradora y día con su turno, horas
+#     trabajadas y si ese día es de descanso.
+#   - aseo_asignacion: una fila por cada actividad asignada a una
+#     colaboradora en un día, con su estado y quién la asignó/marcó.
+#     UNIQUE (id_usuario, fecha, id_actividad) impide asignar dos veces la
+#     misma actividad a la misma persona el mismo día.
+#   - aseo_compensacion: cada devolución de horas acumuladas (en tiempo o
+#     en dinero) para llevar el saldo del banco de horas.
+def asegurar_tablas_aseo(conn):
+    global _tablas_aseo_listas
+    if _tablas_aseo_listas:
+        return
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS aseo_actividad (
+            id SERIAL PRIMARY KEY,
+            descripcion VARCHAR(200) NOT NULL,
+            frecuencia VARCHAR(20) NOT NULL,
+            frecuencia_dias INTEGER NOT NULL,
+            color VARCHAR(7) NOT NULL,
+            activa BOOLEAN NOT NULL DEFAULT TRUE
+        );
+        CREATE TABLE IF NOT EXISTS aseo_turno (
+            id_usuario INTEGER NOT NULL REFERENCES usuario(id) ON DELETE CASCADE,
+            fecha DATE NOT NULL,
+            turno VARCHAR(20) NOT NULL DEFAULT '',
+            horas NUMERIC(4,1) NOT NULL DEFAULT 0,
+            descanso BOOLEAN NOT NULL DEFAULT FALSE,
+            actualizado_por INTEGER REFERENCES usuario(id),
+            PRIMARY KEY (id_usuario, fecha)
+        );
+        CREATE TABLE IF NOT EXISTS aseo_asignacion (
+            id SERIAL PRIMARY KEY,
+            id_usuario INTEGER NOT NULL REFERENCES usuario(id) ON DELETE CASCADE,
+            fecha DATE NOT NULL,
+            id_actividad INTEGER NOT NULL,
+            estado VARCHAR(20) NOT NULL DEFAULT 'Pendiente',
+            observacion VARCHAR(200) NOT NULL DEFAULT '',
+            asignado_por INTEGER REFERENCES usuario(id),
+            fecha_asignacion TIMESTAMP NOT NULL DEFAULT NOW(),
+            marcado_por INTEGER REFERENCES usuario(id),
+            fecha_marcado TIMESTAMP,
+            UNIQUE (id_usuario, fecha, id_actividad)
+        );
+        CREATE TABLE IF NOT EXISTS aseo_compensacion (
+            id SERIAL PRIMARY KEY,
+            id_usuario INTEGER NOT NULL REFERENCES usuario(id) ON DELETE CASCADE,
+            fecha DATE NOT NULL,
+            horas NUMERIC(5,1) NOT NULL CHECK (horas > 0),
+            tipo VARCHAR(10) NOT NULL,
+            nota VARCHAR(200) NOT NULL DEFAULT '',
+            registrado_por INTEGER REFERENCES usuario(id),
+            fecha_registro TIMESTAMP NOT NULL DEFAULT NOW()
+        );
+    """)
+    # La primera vez se cargan las 8 actividades del Excel con su mismo número
+    cur.execute("SELECT COUNT(*) AS n FROM aseo_actividad")
+    if cur.fetchone()['n'] == 0:
+        for numero, frecuencia, color, descripcion in ACTIVIDADES_ASEO_INICIALES:
+            cur.execute("""INSERT INTO aseo_actividad (id, descripcion, frecuencia, frecuencia_dias, color)
+                           VALUES (%s, %s, %s, %s, %s)""",
+                        (numero, descripcion, frecuencia, FRECUENCIAS_ASEO[frecuencia], color))
+        # Las actividades nuevas que cree el administrador seguirán desde el 9
+        cur.execute("SELECT setval(pg_get_serial_sequence('aseo_actividad', 'id'), (SELECT MAX(id) FROM aseo_actividad))")
+    # Actualización de la versión anterior del módulo: antes las actividades
+    # estaban fijas en el código (números del 1 al 8). Ahora la asignación se
+    # enlaza con la tabla aseo_actividad mediante una llave foránea.
+    cur.execute("""
+        DO $$ BEGIN
+            IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'aseo_asignacion'
+                       AND column_name = 'id_actividad' AND data_type = 'smallint') THEN
+                ALTER TABLE aseo_asignacion DROP CONSTRAINT IF EXISTS aseo_asignacion_id_actividad_check;
+                ALTER TABLE aseo_asignacion ALTER COLUMN id_actividad TYPE INTEGER;
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'aseo_asignacion_actividad_fk') THEN
+                ALTER TABLE aseo_asignacion ADD CONSTRAINT aseo_asignacion_actividad_fk
+                    FOREIGN KEY (id_actividad) REFERENCES aseo_actividad(id);
+            END IF;
+        END $$;
+    """)
+    conn.commit()
+    cur.close()
+    _tablas_aseo_listas = True
+
+def hoy_local():
+    # Fecha de hoy en Colombia (el servidor de Render trabaja en hora UTC)
+    return datetime.now(LOCAL_ZONE).date()
+
+# Devuelve el lunes de la semana que contiene la fecha recibida.
+# Ejemplo: miércoles 7 de octubre -> lunes 5 de octubre.
+def lunes_de(fecha):
+    return fecha - timedelta(days=fecha.weekday())
+
+# SEGURIDAD: lee la semana pedida en la URL (?semana=2026-10-05). Si viene
+# vacía o mal escrita se usa la semana actual, nunca una fecha inválida.
+def leer_semana(valor):
+    return lunes_de(leer_fecha(valor) or hoy_local())
+
+# Calcula las horas de un turno escrito como en el Excel:
+#   sin a/p:  "6-2" = 8, "2-10" = 8, "10-6" = 8, "8-6" = 10, "12-6" = 6
+#             (se asume que el turno dura menos de 12 horas)
+#   con a/p:  "6a-4p" = 10, "10p-6a" = 8, "4p-6a" = 14, "6p-6a" = 12
+#             (para los domingos o turnos de 12 horas o más, usa a/p)
+# Devuelve None si el texto no tiene formato de turno.
+def horas_de_turno(turno):
+    coincidencia = REGEX_TURNO.match(turno or '')
+    if not coincidencia:
+        return None
+    h1, m1, s1, h2, m2, s2 = coincidencia.groups()
+    h1, h2, m1, m2 = int(h1), int(h2), int(m1 or 0), int(m2 or 0)
+    if h1 > 24 or h2 > 24 or m1 > 59 or m2 > 59:
+        return None
+    if s1 and s2:
+        # Con a/p se pasa a formato de 24 horas: 4p -> 16, 12a -> 0
+        inicio = (h1 % 12 + (12 if s1.lower() == 'p' else 0)) * 60 + m1
+        fin = (h2 % 12 + (12 if s2.lower() == 'p' else 0)) * 60 + m2
+        minutos = (fin - inicio) % (24 * 60) or 24 * 60
+    else:
+        minutos = (h2 * 60 + m2 - h1 * 60 - m1) % (12 * 60) or 12 * 60
+    return Decimal(minutos) / 60
+
+# Clase CSS (color) de una actividad según su estado:
+#   verde = realizada, rojo = no realizada, blanco = pendiente,
+#   naranja = pendiente de un día que ya pasó (nadie la reportó)
+def clase_estado_aseo(estado, fecha, hoy):
+    if estado == 'Realizada':
+        return 'realizada'
+    if estado == 'No realizada':
+        return 'no-realizada'
+    return 'sin-reportar' if fecha < hoy else 'pendiente'
+
+# Lee el catálogo de actividades de la BD, ordenado por número
+def obtener_actividades(cur):
+    cur.execute("SELECT * FROM aseo_actividad ORDER BY id")
+    return cur.fetchall()
+
+# Banco de horas de cada colaboradora, hasta la semana actual (incluida):
+#   extra       = suma, semana por semana, de las horas que pasaron de 42
+#   compensadas = horas ya devueltas en tiempo o en dinero
+#   saldo       = extra - compensadas (lo que todavía se le debe)
+# Las semanas futuras no cuentan porque esas horas aún no se han trabajado.
+def calcular_banco_horas(cur):
+    hasta = lunes_de(hoy_local()) + timedelta(days=6)
+    cur.execute("""SELECT id_usuario, date_trunc('week', fecha)::date AS semana, SUM(horas) AS horas
+                   FROM aseo_turno WHERE fecha <= %s GROUP BY id_usuario, semana""", (hasta,))
+    banco = {}
+    for fila in cur.fetchall():
+        cuenta = banco.setdefault(fila['id_usuario'], {'extra': Decimal('0'), 'compensadas': Decimal('0')})
+        cuenta['extra'] += max(Decimal('0'), fila['horas'] - LIMITE_HORAS_SEMANA)
+    cur.execute("SELECT id_usuario, SUM(horas) AS horas FROM aseo_compensacion GROUP BY id_usuario")
+    for fila in cur.fetchall():
+        cuenta = banco.setdefault(fila['id_usuario'], {'extra': Decimal('0'), 'compensadas': Decimal('0')})
+        cuenta['compensadas'] += fila['horas']
+    for cuenta in banco.values():
+        cuenta['saldo'] = cuenta['extra'] - cuenta['compensadas']
+    return banco
+
+# Filtro para las plantillas: {{ 8.0|horas }} muestra "8" y {{ 7.5|horas }} "7.5"
+@app.template_filter('horas')
+def formato_horas(valor):
+    numero = Decimal(valor or 0).quantize(Decimal('0.1'), rounding=ROUND_HALF_UP)
+    return str(int(numero)) if numero == int(numero) else str(numero)
+
+# --- PANEL: Aseo general (tablero semanal) ---
+# Muestra el catálogo de actividades con su control de frecuencia, el
+# cronograma de la semana por colaboradora (turnos, horas, descansos y
+# actividades coloreadas) y el banco de horas.
 @app.route('/aseo')
 def aseo():
     # Validar acceso
@@ -1605,7 +1845,409 @@ def aseo():
     if acceso_negado:
         return acceso_negado
 
-    return render_template('aseo.html')
+    usuario_sesion = obtener_usuario_actual()
+    hoy = hoy_local()
+    lunes = leer_semana(request.args.get('semana'))
+    fechas = [lunes + timedelta(days=i) for i in range(7)]
+    domingo = fechas[-1]
+
+    conn = get_db_connection()
+    asegurar_tablas_aseo(conn)
+    cur = conn.cursor()
+    actividades = obtener_actividades(cur)
+    cur.execute("SELECT id, nombres, apellidos FROM usuario WHERE estado = 'Activo' ORDER BY nombres, apellidos")
+    usuarios = cur.fetchall()
+
+    # Turnos y actividades de la semana, agrupados por (colaboradora, fecha)
+    cur.execute("SELECT * FROM aseo_turno WHERE fecha BETWEEN %s AND %s", (lunes, domingo))
+    turnos = {(t['id_usuario'], t['fecha']): t for t in cur.fetchall()}
+    cur.execute("""SELECT s.id, s.id_usuario, s.fecha, s.id_actividad, s.estado, s.observacion,
+                          a.descripcion, a.color
+                   FROM aseo_asignacion s JOIN aseo_actividad a ON a.id = s.id_actividad
+                   WHERE s.fecha BETWEEN %s AND %s ORDER BY s.id_actividad""", (lunes, domingo))
+    asignaciones = {}
+    for a in cur.fetchall():
+        a['clase'] = clase_estado_aseo(a['estado'], a['fecha'], hoy)
+        asignaciones.setdefault((a['id_usuario'], a['fecha']), []).append(a)
+
+    banco = calcular_banco_horas(cur)
+
+    # Arma, para cada colaboradora, sus 7 días listos para la plantilla
+    colaboradoras = []
+    for u in usuarios:
+        dias = []
+        for fecha in fechas:
+            turno = turnos.get((u['id'], fecha))
+            dias.append({
+                'fecha': fecha,
+                'turno': turno['turno'] if turno else '',
+                'horas': turno['horas'] if turno else Decimal('0'),
+                'descanso': bool(turno and turno['descanso']),
+                'actividades': asignaciones.get((u['id'], fecha), []),
+            })
+        todas = [a for d in dias for a in d['actividades']]
+        horas_semana = sum(d['horas'] for d in dias)
+        colaboradoras.append({
+            'id': u['id'],
+            'nombre': f"{u['nombres']} {u['apellidos']}",
+            'dias': dias,
+            'horas_semana': horas_semana,
+            # Horas de esta semana que pasan de 42 y van al banco de horas
+            'exceso': max(Decimal('0'), horas_semana - LIMITE_HORAS_SEMANA),
+            'banco': banco.get(u['id'], {'extra': Decimal('0'), 'compensadas': Decimal('0'), 'saldo': Decimal('0')}),
+            'total': len(todas),
+            'realizadas': sum(1 for a in todas if a['estado'] == 'Realizada'),
+        })
+
+    # Control de frecuencia: para cada actividad, la última vez que se hizo
+    # y si ya hay una fecha programada. Si pasó más tiempo del que indica su
+    # frecuencia y no está programada, se muestra como "Vencida".
+    cur.execute("""SELECT id_actividad,
+                          MAX(fecha) FILTER (WHERE estado = 'Realizada') AS ultima,
+                          MIN(fecha) FILTER (WHERE estado = 'Pendiente' AND fecha >= %s) AS programada
+                   FROM aseo_asignacion GROUP BY id_actividad""", (hoy,))
+    historial = {h['id_actividad']: h for h in cur.fetchall()}
+
+    # Últimas devoluciones de horas registradas (para poder corregirlas)
+    cur.execute("""SELECT c.id, c.fecha, c.horas, c.tipo, c.nota, u.nombres, u.apellidos
+                   FROM aseo_compensacion c JOIN usuario u ON u.id = c.id_usuario
+                   ORDER BY c.fecha DESC, c.id DESC LIMIT 30""")
+    compensaciones = cur.fetchall()
+    cur.close()
+    conn.close()
+
+    catalogo = []
+    for act in actividades:
+        h = historial.get(act['id'], {})
+        ultima, programada = h.get('ultima'), h.get('programada')
+        vence = ultima + timedelta(days=act['frecuencia_dias']) if ultima else None
+        if vence and vence >= hoy:
+            control = ('al-dia', f"Al día (hasta el {vence.strftime('%d/%m')})")
+        elif programada:
+            control = ('programada', f"Programada para el {programada.strftime('%d/%m')}")
+        else:
+            control = ('vencida', 'Vencida' if ultima else 'Sin registro')
+        catalogo.append(dict(act, ultima=ultima, control=control))
+
+    return render_template('aseo.html', catalogo=catalogo, colaboradoras=colaboradoras, fechas=fechas,
+                           dias_semana=DIAS_SEMANA, lunes=lunes, hoy=hoy,
+                           semana_anterior=lunes - timedelta(days=7), semana_siguiente=lunes + timedelta(days=7),
+                           es_admin=es_admin(usuario_sesion), id_sesion=usuario_sesion['id'],
+                           frecuencias=FRECUENCIAS_ASEO, limite_horas=LIMITE_HORAS_SEMANA,
+                           tipos_compensacion=TIPOS_COMPENSACION, compensaciones=compensaciones)
+
+# SEGURIDAD: las rutas que modifican el cronograma, las actividades o el
+# banco de horas son solo para administradores. Devuelve la respuesta de
+# error, o None si puede seguir.
+def validar_admin_aseo():
+    acceso_negado = validar_acceso('aseo')
+    if acceso_negado:
+        return acceso_negado
+    if not es_admin(obtener_usuario_actual()):
+        app.logger.warning('Intento de modificar aseo sin ser admin: %s', session.get('usuario'))
+        flash('Solo un administrador puede modificar el cronograma de aseo.')
+        return redirect(url_for('aseo'))
+    return None
+
+# --- ASEO: Guardar la semana de una colaboradora ---
+# Recibe, para cada uno de los 7 días: turno, horas, si es descanso y las
+# actividades marcadas. Las actividades que se quitan se borran, las nuevas
+# se crean como "Pendiente" y las que ya estaban conservan su estado.
+# Sirve también para corregir semanas pasadas cuando hay un percance.
+@app.route('/aseo/programar', methods=['POST'])
+def aseo_programar():
+    acceso_negado = validar_admin_aseo()
+    if acceso_negado:
+        return acceso_negado
+    usuario_sesion = obtener_usuario_actual()
+    lunes = leer_semana(request.form.get('semana'))
+    id_usuario = leer_entero(request.form.get('id_usuario'), minimo=1)
+
+    conn = get_db_connection()
+    asegurar_tablas_aseo(conn)
+    cur = conn.cursor()
+    # SEGURIDAD: solo se aceptan números de actividad que existan en la BD
+    ids_actividades = {a['id'] for a in obtener_actividades(cur)}
+
+    # SEGURIDAD: se valida cada día antes de tocar la BD; si un solo dato
+    # está mal no se guarda nada de la semana
+    dias, errores = [], []
+    for i in range(7):
+        turno = leer_texto(request.form.get(f'turno_{i}'), 20, requerido=False)
+        horas_texto = (request.form.get(f'horas_{i}') or '').strip()
+        horas = leer_decimal(horas_texto, maximo=Decimal('24')) if horas_texto else None
+        descanso = request.form.get(f'descanso_{i}') == '1' or (turno or '').upper() in TURNOS_DESCANSO
+        actividades = {leer_entero(x) for x in request.form.getlist(f'act_{i}')}
+        if turno is None or (horas_texto and horas is None) or not actividades <= ids_actividades:
+            errores.append(DIAS_SEMANA[i])
+            continue
+        if horas is None:
+            # Si no se digitaron las horas, se calculan a partir del turno
+            horas = horas_de_turno(turno) or Decimal('0')
+        if descanso:
+            # Un día de descanso no lleva horas ni actividades
+            horas, actividades = Decimal('0'), set()
+            turno = turno or 'N'
+        dias.append((lunes + timedelta(days=i), turno, horas, descanso, actividades))
+
+    destino = None
+    if id_usuario:
+        cur.execute("SELECT id FROM usuario WHERE id=%s", (id_usuario,))
+        destino = cur.fetchone()
+    if not destino:
+        flash('Colaboradora inválida.')
+    elif errores:
+        flash('Revisa los datos de: ' + ', '.join(errores) + '. El turno admite hasta 20 caracteres y las horas van de 0 a 24.')
+    else:
+        for fecha, turno, horas, descanso, actividades in dias:
+            if not turno and not horas and not descanso:
+                # Día vacío: se borra el turno para no guardar filas sin datos
+                cur.execute("DELETE FROM aseo_turno WHERE id_usuario=%s AND fecha=%s", (id_usuario, fecha))
+            else:
+                cur.execute("""INSERT INTO aseo_turno (id_usuario, fecha, turno, horas, descanso, actualizado_por)
+                               VALUES (%s, %s, %s, %s, %s, %s)
+                               ON CONFLICT (id_usuario, fecha) DO UPDATE SET turno=EXCLUDED.turno, horas=EXCLUDED.horas,
+                                   descanso=EXCLUDED.descanso, actualizado_por=EXCLUDED.actualizado_por""",
+                            (id_usuario, fecha, turno, horas, descanso, usuario_sesion['id']))
+            # Se borran las actividades que se desmarcaron ese día...
+            cur.execute("DELETE FROM aseo_asignacion WHERE id_usuario=%s AND fecha=%s AND NOT (id_actividad = ANY(%s))",
+                        (id_usuario, fecha, list(actividades)))
+            # ...y se agregan las nuevas; "DO NOTHING" deja intactas (con su
+            # estado) las que ya estaban asignadas
+            for id_actividad in sorted(actividades):
+                cur.execute("""INSERT INTO aseo_asignacion (id_usuario, fecha, id_actividad, asignado_por)
+                               VALUES (%s, %s, %s, %s) ON CONFLICT (id_usuario, fecha, id_actividad) DO NOTHING""",
+                            (id_usuario, fecha, id_actividad, usuario_sesion['id']))
+        conn.commit()
+        app.logger.info('Semana de aseo %s del usuario %s programada por %s', lunes, id_usuario, usuario_sesion['correo'])
+        total = sum(d[2] for d in dias)
+        if total > LIMITE_HORAS_SEMANA:
+            flash(f'Semana programada. Atención: suma {formato_horas(total)} horas, '
+                  f'{formato_horas(total - LIMITE_HORAS_SEMANA)} por encima del límite de {LIMITE_HORAS_SEMANA} '
+                  f'(se acumulan en el banco de horas).')
+        else:
+            flash('Semana programada.')
+    cur.close()
+    conn.close()
+    return redirect(url_for('aseo', semana=lunes.isoformat()))
+
+# --- ASEO: Copiar la semana anterior ---
+# Copia los turnos y actividades de la semana pasada (de todas las
+# colaboradoras) a la semana que se está viendo. Las actividades copiadas
+# quedan como "Pendiente". Lo que ya estaba programado no se sobrescribe.
+@app.route('/aseo/copiar', methods=['POST'])
+def aseo_copiar():
+    acceso_negado = validar_admin_aseo()
+    if acceso_negado:
+        return acceso_negado
+    usuario_sesion = obtener_usuario_actual()
+    lunes = leer_semana(request.form.get('semana'))
+    conn = get_db_connection()
+    asegurar_tablas_aseo(conn)
+    cur = conn.cursor()
+    # "fecha + 7" mueve cada registro exactamente una semana adelante.
+    # Las actividades desactivadas no se copian.
+    cur.execute("""INSERT INTO aseo_turno (id_usuario, fecha, turno, horas, descanso, actualizado_por)
+                   SELECT id_usuario, fecha + 7, turno, horas, descanso, %s FROM aseo_turno
+                   WHERE fecha BETWEEN %s AND %s ON CONFLICT (id_usuario, fecha) DO NOTHING""",
+                (usuario_sesion['id'], lunes - timedelta(days=7), lunes - timedelta(days=1)))
+    cur.execute("""INSERT INTO aseo_asignacion (id_usuario, fecha, id_actividad, asignado_por)
+                   SELECT s.id_usuario, s.fecha + 7, s.id_actividad, %s
+                   FROM aseo_asignacion s JOIN aseo_actividad a ON a.id = s.id_actividad AND a.activa
+                   WHERE s.fecha BETWEEN %s AND %s ON CONFLICT (id_usuario, fecha, id_actividad) DO NOTHING""",
+                (usuario_sesion['id'], lunes - timedelta(days=7), lunes - timedelta(days=1)))
+    copiadas = cur.rowcount
+    conn.commit()
+    cur.close()
+    conn.close()
+    app.logger.info('Semana de aseo %s copiada de la anterior por %s', lunes, usuario_sesion['correo'])
+    flash(f'Semana anterior copiada ({copiadas} actividades nuevas).' if copiadas else 'No había actividades nuevas para copiar de la semana anterior.')
+    return redirect(url_for('aseo', semana=lunes.isoformat()))
+
+# --- ASEO: Crear o editar una actividad del catálogo ---
+# Si el formulario trae "id_actividad" se edita esa actividad; si no, se
+# crea una nueva. Las actividades no se borran: se desactivan, para no
+# perder el historial de cuándo se hicieron.
+@app.route('/aseo/actividad', methods=['POST'])
+def aseo_actividad():
+    acceso_negado = validar_admin_aseo()
+    if acceso_negado:
+        return acceso_negado
+    usuario_sesion = obtener_usuario_actual()
+    id_actividad = leer_entero(request.form.get('id_actividad'), minimo=1) if request.form.get('id_actividad') else None
+    descripcion = leer_texto(request.form.get('descripcion'), 200)
+    frecuencia = request.form.get('frecuencia')
+    color = (request.form.get('color') or '').strip()
+    activa = request.form.get('activa') == '1'
+    semana = leer_semana(request.form.get('semana'))
+
+    # SEGURIDAD: descripción obligatoria, frecuencia de la lista y color "#rrggbb"
+    if descripcion is None or frecuencia not in FRECUENCIAS_ASEO or not REGEX_COLOR.match(color):
+        flash('Revisa la actividad: la descripción es obligatoria (máx. 200 caracteres) y la frecuencia y el color deben ser válidos.')
+        return redirect(url_for('aseo', semana=semana.isoformat()))
+
+    conn = get_db_connection()
+    asegurar_tablas_aseo(conn)
+    cur = conn.cursor()
+    if id_actividad:
+        cur.execute("""UPDATE aseo_actividad SET descripcion=%s, frecuencia=%s, frecuencia_dias=%s, color=%s, activa=%s
+                       WHERE id=%s""", (descripcion, frecuencia, FRECUENCIAS_ASEO[frecuencia], color, activa, id_actividad))
+        mensaje = 'Actividad actualizada.' if cur.rowcount else 'La actividad no existe.'
+    else:
+        cur.execute("""INSERT INTO aseo_actividad (descripcion, frecuencia, frecuencia_dias, color)
+                       VALUES (%s, %s, %s, %s) RETURNING id""", (descripcion, frecuencia, FRECUENCIAS_ASEO[frecuencia], color))
+        mensaje = f"Actividad {cur.fetchone()['id']} creada."
+    conn.commit()
+    cur.close()
+    conn.close()
+    app.logger.info('Actividad de aseo %s guardada por %s', id_actividad or 'nueva', usuario_sesion['correo'])
+    flash(mensaje)
+    return redirect(url_for('aseo', semana=semana.isoformat()))
+
+# --- ASEO: Registrar una devolución de horas del banco ---
+# Cuando a una colaboradora se le devuelven horas acumuladas (con tiempo
+# libre o pagándolas), se registra aquí y se descuentan de su saldo.
+@app.route('/aseo/compensar', methods=['POST'])
+def aseo_compensar():
+    acceso_negado = validar_admin_aseo()
+    if acceso_negado:
+        return acceso_negado
+    usuario_sesion = obtener_usuario_actual()
+    semana = leer_semana(request.form.get('semana'))
+    id_usuario = leer_entero(request.form.get('id_usuario'), minimo=1)
+    fecha = leer_fecha(request.form.get('fecha'))
+    horas = leer_decimal(request.form.get('horas'), minimo=Decimal('0.5'), maximo=Decimal('500'))
+    tipo = request.form.get('tipo')
+    nota = leer_texto(request.form.get('nota'), 200, requerido=False)
+
+    conn = get_db_connection()
+    asegurar_tablas_aseo(conn)
+    cur = conn.cursor()
+    saldo = calcular_banco_horas(cur).get(id_usuario, {}).get('saldo', Decimal('0'))
+    # SEGURIDAD: datos válidos y nunca devolver más horas de las acumuladas
+    if not id_usuario or not fecha or horas is None or tipo not in TIPOS_COMPENSACION or nota is None:
+        flash('Revisa la devolución: colaboradora, fecha, horas (mínimo 0.5) y tipo son obligatorios.')
+    elif horas > saldo:
+        flash(f'No se pueden devolver {formato_horas(horas)} horas: el saldo de esta colaboradora es {formato_horas(saldo)} horas.')
+    else:
+        cur.execute("""INSERT INTO aseo_compensacion (id_usuario, fecha, horas, tipo, nota, registrado_por)
+                       VALUES (%s, %s, %s, %s, %s, %s)""", (id_usuario, fecha, horas, tipo, nota, usuario_sesion['id']))
+        conn.commit()
+        app.logger.info('Devolución de %s horas (%s) al usuario %s registrada por %s', horas, tipo, id_usuario, usuario_sesion['correo'])
+        flash('Devolución de horas registrada.')
+    cur.close()
+    conn.close()
+    return redirect(url_for('aseo', semana=semana.isoformat()))
+
+# --- ASEO: Eliminar una devolución de horas (para corregir errores) ---
+@app.route('/aseo/compensacion/<int:id_compensacion>/eliminar', methods=['POST'])
+def aseo_compensacion_eliminar(id_compensacion):
+    acceso_negado = validar_admin_aseo()
+    if acceso_negado:
+        return acceso_negado
+    usuario_sesion = obtener_usuario_actual()
+    semana = leer_semana(request.form.get('semana'))
+    conn = get_db_connection()
+    asegurar_tablas_aseo(conn)
+    cur = conn.cursor()
+    cur.execute("DELETE FROM aseo_compensacion WHERE id=%s", (id_compensacion,))
+    conn.commit()
+    flash('Devolución eliminada.' if cur.rowcount else 'La devolución no existe.')
+    cur.close()
+    conn.close()
+    app.logger.info('Devolución de horas %s eliminada por %s', id_compensacion, usuario_sesion['correo'])
+    return redirect(url_for('aseo', semana=semana.isoformat()))
+
+# --- ASEO: Marcar una actividad (API usada por el tablero con fetch) ---
+# Recibe {"estado": "Realizada" | "No realizada" | "Pendiente", "observacion": "..."}
+# y devuelve el nuevo color para pintar la actividad sin recargar la página.
+@app.route('/api/aseo/estado/<int:id_asignacion>', methods=['POST'])
+def api_aseo_estado(id_asignacion):
+    # SEGURIDAD: igual que en las demás APIs, se exige sesión y permiso
+    if not tiene_permiso('aseo'):
+        return jsonify({'ok': False, 'msg': 'No autorizado'}), 403
+    usuario_sesion = obtener_usuario_actual()
+    data = request.get_json(silent=True) or {}
+    estado = data.get('estado')
+    observacion = leer_texto(data.get('observacion'), 200, requerido=False)
+    # SEGURIDAD: solo estados conocidos y observaciones de largo razonable
+    if estado not in ESTADOS_ASEO or observacion is None:
+        return jsonify({'ok': False, 'msg': 'Estado u observación inválidos'}), 400
+
+    conn = get_db_connection()
+    asegurar_tablas_aseo(conn)
+    cur = conn.cursor()
+    cur.execute("SELECT id, id_usuario, fecha FROM aseo_asignacion WHERE id=%s", (id_asignacion,))
+    asignacion = cur.fetchone()
+    hoy = hoy_local()
+    error = None
+    if not asignacion:
+        error = ('La actividad no existe.', 404)
+    # SEGURIDAD: una colaboradora solo puede marcar sus propias actividades
+    elif not es_admin(usuario_sesion) and asignacion['id_usuario'] != usuario_sesion['id']:
+        error = ('Solo puedes marcar tus propias actividades.', 403)
+    # No se puede reportar como hecha (o no hecha) una actividad de un día futuro
+    elif estado != 'Pendiente' and asignacion['fecha'] > hoy:
+        error = ('No puedes marcar una actividad de un día que todavía no llega.', 400)
+    if error:
+        cur.close()
+        conn.close()
+        return jsonify({'ok': False, 'msg': error[0]}), error[1]
+
+    # Al volver a "Pendiente" se borra quién la marcó y cuándo
+    marcada = estado != 'Pendiente'
+    cur.execute("""UPDATE aseo_asignacion SET estado=%s, observacion=%s, marcado_por=%s,
+                   fecha_marcado=CASE WHEN %s THEN NOW() ELSE NULL END WHERE id=%s""",
+                (estado, observacion, usuario_sesion['id'] if marcada else None, marcada, id_asignacion))
+    conn.commit()
+    cur.close()
+    conn.close()
+    app.logger.info('Actividad de aseo %s marcada "%s" por %s', id_asignacion, estado, usuario_sesion['correo'])
+    return jsonify({'ok': True, 'estado': estado, 'observacion': observacion,
+                    'clase': clase_estado_aseo(estado, asignacion['fecha'], hoy)})
+
+# --- ASEO: Reasignar una actividad por un percance (solo admin) ---
+# Recibe {"id_usuario": 5, "fecha": "2026-10-07"} y pasa la actividad a otra
+# colaboradora y/o a otro día. Vuelve a quedar "Pendiente".
+@app.route('/api/aseo/reasignar/<int:id_asignacion>', methods=['POST'])
+def api_aseo_reasignar(id_asignacion):
+    usuario_sesion = obtener_usuario_actual()
+    # SEGURIDAD: solo administradores pueden mover actividades
+    if not tiene_permiso('aseo') or not es_admin(usuario_sesion):
+        return jsonify({'ok': False, 'msg': 'Solo un administrador puede reasignar actividades.'}), 403
+    data = request.get_json(silent=True) or {}
+    id_usuario = leer_entero(data.get('id_usuario'), minimo=1)
+    fecha = leer_fecha(data.get('fecha'))
+    if not id_usuario or not fecha:
+        return jsonify({'ok': False, 'msg': 'Colaboradora o fecha inválida.'}), 400
+
+    conn = get_db_connection()
+    asegurar_tablas_aseo(conn)
+    cur = conn.cursor()
+    cur.execute("SELECT id FROM usuario WHERE id=%s AND estado='Activo'", (id_usuario,))
+    destino_valido = cur.fetchone()
+    cur.execute("SELECT id_actividad FROM aseo_asignacion WHERE id=%s", (id_asignacion,))
+    asignacion = cur.fetchone()
+    respuesta = None
+    if not destino_valido or not asignacion:
+        respuesta = ({'ok': False, 'msg': 'La actividad o la colaboradora no existen.'}, 404)
+    else:
+        # No se puede mover a quien ya tiene esa misma actividad ese día
+        cur.execute("SELECT 1 FROM aseo_asignacion WHERE id_usuario=%s AND fecha=%s AND id_actividad=%s AND id<>%s",
+                    (id_usuario, fecha, asignacion['id_actividad'], id_asignacion))
+        if cur.fetchone():
+            respuesta = ({'ok': False, 'msg': 'Esa colaboradora ya tiene esta actividad ese día.'}, 409)
+        else:
+            cur.execute("""UPDATE aseo_asignacion SET id_usuario=%s, fecha=%s, estado='Pendiente', observacion='',
+                           marcado_por=NULL, fecha_marcado=NULL, asignado_por=%s WHERE id=%s""",
+                        (id_usuario, fecha, usuario_sesion['id'], id_asignacion))
+            conn.commit()
+            app.logger.info('Actividad de aseo %s reasignada al usuario %s (%s) por %s',
+                            id_asignacion, id_usuario, fecha, usuario_sesion['correo'])
+            respuesta = ({'ok': True}, 200)
+    cur.close()
+    conn.close()
+    return jsonify(respuesta[0]), respuesta[1]
 
 if __name__ == '__main__':
     app.run(debug=MODO_DEBUG)
