@@ -1,4 +1,6 @@
 # API para cambiar estado y tiempo de habitación
+import hashlib  # USUARIOS: huella (HMAC-SHA256) del documento para detectar duplicados
+import hmac
 import json  # NÓMINA: convierte los datos de nómina a texto JSON antes de cifrarlos
 import os
 import re
@@ -1237,7 +1239,8 @@ def nomina():
     empleados = []
     for fila in cur.fetchall():
         ficha = descifrar_nomina(fila['datos_cifrados'], fila['id']) if fila['datos_cifrados'] else None
-        empleados.append({'id': fila['id'], 'documento': fila['documento'],
+        # SEGURIDAD: el documento está cifrado; en la tabla se muestra enmascarado
+        empleados.append({'id': fila['id'], 'documento': enmascarar(descifrar_dato(fila['documento'])),
                           'nombre': f"{fila['nombres']} {fila['apellidos']}", 'rol': fila['rol'], 'ficha': ficha})
 
     # Historial: las 200 liquidaciones más recientes, con sus totales descifrados
@@ -1398,6 +1401,8 @@ def nomina_comprobante(id_liquidacion):
     conn.close()
     if not liquidacion:
         abort(404)
+    # El comprobante necesita la identificación completa: se descifra aquí
+    liquidacion['documento'] = descifrar_dato(liquidacion['documento'])
     datos = descifrar_nomina(liquidacion['datos_cifrados'], liquidacion['id_usuario'])
     if datos is None:
         flash('No se pudo leer esta liquidación: los datos están dañados o la clave NOMINA_CLAVE cambió.')
@@ -1472,11 +1477,132 @@ def api_habitacion_estado(hab_id):
     return jsonify({'ok': True})
 
 
-# SEGURIDAD: columnas de usuario que se envían a las plantillas. Se excluye
-# "contrasena" para que el hash nunca llegue al HTML del navegador.
-COLUMNAS_USUARIO_PUBLICAS = "id, documento, nombres, apellidos, rol, celular, correo, estado, funcion, permisos"
+# =====================================================================
+# MÓDULO: Gestión de usuarios (datos personales protegidos)
+# ---------------------------------------------------------------------
+# SEGURIDAD: protección de los datos sensibles del personal.
+#   - Documento y celular se guardan CIFRADOS en la BD (Fernet, la misma
+#     clave NOMINA_CLAVE del módulo de nómina). En Neon se ve "enc1:gAAAA...".
+#   - Para no repetir documentos sin tener que descifrarlos todos, se guarda
+#     además una "huella" (HMAC-SHA256) del documento: sirve para comparar,
+#     pero no se puede revertir para obtener el número.
+#   - En la lista de usuarios el documento y el celular se muestran
+#     enmascarados (••••••6749). Solo un administrador puede ver el dato
+#     completo, al pulsar "Editar", y cada consulta queda en el log.
+#   - Los usuarios que ya existían con datos sin cifrar se cifran solos la
+#     primera vez que se abre el módulo (ver asegurar_cifrado_usuarios).
+#   - Contraseñas: se guardan con hash scrypt (no se pueden descifrar) y
+#     ahora deben tener mínimo 8 caracteres con letras y números.
+#   - Protección contra quedarse sin administradores: nadie puede
+#     desactivarse ni quitarse el rol de admin a sí mismo, y siempre debe
+#     quedar al menos un administrador activo.
+#
+# Qué NO se cifra y por qué:
+#   - Correo: es el usuario para iniciar sesión y la BD debe buscarlo en
+#     cada login. Sigue protegido por las reglas de acceso.
+#   - Nombres y apellidos: se usan en nómina, aseo, turnos y ventas para
+#     identificar a cada persona.
+# =====================================================================
 
-# --- PANEL: Crear usuario ---
+# Prefijo que marca un dato cifrado; los datos antiguos no lo tienen
+PREFIJO_CIFRADO = 'enc1:'
+# SEGURIDAD: formatos permitidos. El documento admite letras para cédulas
+# de extranjería y pasaportes; puntos, espacios y guiones se quitan antes.
+REGEX_DOCUMENTO = re.compile(r'^[0-9A-Za-z]{5,15}$')
+REGEX_CELULAR = re.compile(r'^\+?[0-9]{7,15}$')
+
+# Cifra un dato personal (documento o celular) para guardarlo en la BD
+def cifrar_dato(valor):
+    return PREFIJO_CIFRADO + CIFRADOR_NOMINA.encrypt(valor.encode('utf-8')).decode('ascii')
+
+# Descifra un dato personal. Si el dato es antiguo (sin cifrar) lo devuelve
+# tal cual, así nada se rompe mientras se migran los datos.
+def descifrar_dato(valor):
+    if not valor or not valor.startswith(PREFIJO_CIFRADO):
+        return valor or ''
+    if CIFRADOR_NOMINA is None:
+        return '(cifrado)'
+    try:
+        return CIFRADOR_NOMINA.decrypt(valor[len(PREFIJO_CIFRADO):].encode('ascii')).decode('utf-8')
+    except InvalidToken:
+        app.logger.error('Dato personal ilegible o alterado en la BD.')
+        return '(ilegible)'
+
+# SEGURIDAD: huella del documento (HMAC-SHA256 con una clave derivada de
+# NOMINA_CLAVE). El mismo documento siempre da la misma huella, así se
+# detectan duplicados sin guardar el número a la vista.
+def huella_documento(documento):
+    clave = hashlib.sha256(b'motelflow|huella-documento|' + os.environ['NOMINA_CLAVE'].encode('ascii')).digest()
+    return hmac.new(clave, documento.upper().encode('utf-8'), hashlib.sha256).hexdigest()
+
+# Muestra solo los últimos 4 caracteres: "1007396749" -> "••••••6749"
+def enmascarar(valor):
+    if not valor:
+        return ''
+    return '•' * max(len(valor) - 4, 0) + valor[-4:]
+
+# Quita puntos, espacios, guiones y paréntesis: "1.007.396.749" -> "1007396749"
+def normalizar_documento(valor):
+    return re.sub(r'[\s.\-]', '', valor or '')
+
+def normalizar_celular(valor):
+    return re.sub(r'[\s.\-()]', '', valor or '')
+
+# Filtro para las plantillas: {{ "1007396749"|documento }} -> "1.007.396.749"
+@app.template_filter('documento')
+def formato_documento(valor):
+    return f"{int(valor):,}".replace(',', '.') if (valor or '').isdigit() else (valor or '')
+
+# Indica si ya se revisó/migró el cifrado de la tabla usuario (una vez por arranque)
+_cifrado_usuarios_listo = False
+
+# Prepara la tabla usuario para los datos cifrados y cifra los antiguos:
+#   1. documento y celular pasan a TEXT (un dato cifrado ocupa ~120 caracteres)
+#   2. se agrega la columna documento_huella, única (no hay dos documentos iguales)
+#   3. cada usuario con documento o celular sin cifrar se cifra
+def asegurar_cifrado_usuarios(conn):
+    global _cifrado_usuarios_listo
+    if _cifrado_usuarios_listo or CIFRADOR_NOMINA is None:
+        return
+    cur = conn.cursor()
+    cur.execute("""
+        DO $$ BEGIN
+            IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'usuario'
+                       AND column_name = 'documento' AND data_type <> 'text') THEN
+                ALTER TABLE usuario ALTER COLUMN documento TYPE TEXT, ALTER COLUMN celular TYPE TEXT;
+            END IF;
+        END $$;
+        ALTER TABLE usuario ADD COLUMN IF NOT EXISTS documento_huella VARCHAR(64);
+        CREATE UNIQUE INDEX IF NOT EXISTS usuario_documento_huella_key ON usuario (documento_huella);
+    """)
+    cur.execute("""SELECT id, documento, celular FROM usuario
+                   WHERE documento NOT LIKE 'enc1:%' OR documento_huella IS NULL
+                      OR (COALESCE(celular, '') <> '' AND celular NOT LIKE 'enc1:%')""")
+    for fila in cur.fetchall():
+        documento = normalizar_documento(descifrar_dato(fila['documento']))
+        celular = descifrar_dato(fila['celular'])
+        cur.execute("UPDATE usuario SET documento=%s, celular=%s, documento_huella=%s WHERE id=%s",
+                    (cifrar_dato(documento), cifrar_dato(celular) if celular else '', huella_documento(documento), fila['id']))
+        app.logger.info('Datos personales del usuario %s cifrados.', fila['id'])
+    conn.commit()
+    cur.close()
+    _cifrado_usuarios_listo = True
+
+# SEGURIDAD: columnas de usuario que se envían a las plantillas. Se excluye
+# "contrasena" para que el hash nunca llegue al HTML del navegador. Documento
+# y celular se envían aparte, ya enmascarados.
+COLUMNAS_USUARIO_PUBLICAS = "id, nombres, apellidos, rol, correo, estado, funcion, permisos"
+
+# SEGURIDAD: una contraseña válida tiene 8 a 128 caracteres, con al menos
+# una letra y un número. Devuelve el mensaje de error, o None si es válida.
+def validar_contrasena(contrasena):
+    if not (LONGITUD_MINIMA_CONTRASENA <= len(contrasena) <= 128):
+        return f'La contraseña debe tener entre {LONGITUD_MINIMA_CONTRASENA} y 128 caracteres.'
+    if not re.search(r'[A-Za-z]', contrasena) or not re.search(r'[0-9]', contrasena):
+        return 'La contraseña debe tener al menos una letra y un número.'
+    return None
+
+# --- PANEL: Crear / editar usuarios ---
 @app.route('/usuarios', methods=['GET', 'POST'])
 def usuarios():
     # Validar acceso
@@ -1485,17 +1611,21 @@ def usuarios():
         return acceso_negado
 
     usuario_sesion = obtener_usuario_actual()
+    # SEGURIDAD: sin la clave de cifrado no se guardan datos personales sin proteger
+    if CIFRADOR_NOMINA is None:
+        return render_template('usuarios.html', usuarios=[], sin_clave=True, es_admin=es_admin(usuario_sesion))
     conn = get_db_connection()
+    asegurar_cifrado_usuarios(conn)
     cur = conn.cursor()
     mensaje = None
     if request.method == 'POST':
         id_usuario = leer_entero(request.form.get('id_usuario'), minimo=1) if request.form.get('id_usuario') else None
         # SEGURIDAD: validación de cada campo según los límites de la BD
-        documento = leer_texto(request.form.get('documento'), 20)
+        documento = normalizar_documento(request.form.get('documento'))
+        celular = normalizar_celular(request.form.get('celular'))
         nombres = leer_texto(request.form.get('nombres'), 100)
         apellidos = leer_texto(request.form.get('apellidos'), 100)
         rol = (request.form.get('rol') or '').strip().lower()
-        celular = leer_texto(request.form.get('celular'), 20, requerido=False)
         correo = leer_texto(request.form.get('correo'), 100)
         contrasena = request.form.get('contrasena') or ''
         estado = request.form.get('estado') or 'Activo'
@@ -1503,14 +1633,19 @@ def usuarios():
 
         usuario_actual = None
         if id_usuario:
-            cur.execute("SELECT permisos, rol FROM usuario WHERE id=%s", (id_usuario,))
+            cur.execute("SELECT id, permisos, rol, estado FROM usuario WHERE id=%s", (id_usuario,))
             usuario_actual = cur.fetchone()
 
         errores = []
         if request.form.get('id_usuario') and not usuario_actual:
             errores.append('El usuario a editar no existe.')
-        if None in (documento, nombres, apellidos, celular, funcion):
+        if None in (nombres, apellidos, funcion):
             errores.append('Revisa los campos: hay datos vacíos o demasiado largos.')
+        # Al crear, el documento es obligatorio; al editar, vacío = no cambiarlo
+        if (documento or not id_usuario) and not REGEX_DOCUMENTO.match(documento):
+            errores.append('Documento inválido: de 5 a 15 números o letras.')
+        if celular and not REGEX_CELULAR.match(celular):
+            errores.append('Celular inválido: de 7 a 15 números (puede empezar con +).')
         if correo is None or not REGEX_CORREO.match(correo):
             errores.append('Correo inválido.')
         if rol not in ROLES_VALIDOS:
@@ -1518,17 +1653,36 @@ def usuarios():
         if estado not in ESTADOS_USUARIO:
             errores.append('Estado inválido.')
         # Al crear, la contraseña es obligatoria; al editar, vacía = no cambiarla
-        if (not id_usuario or contrasena) and not (LONGITUD_MINIMA_CONTRASENA <= len(contrasena) <= 128):
-            errores.append(f'La contraseña debe tener entre {LONGITUD_MINIMA_CONTRASENA} y 128 caracteres.')
+        if not id_usuario or contrasena:
+            error_contrasena = validar_contrasena(contrasena)
+            if error_contrasena:
+                errores.append(error_contrasena)
         # SEGURIDAD: solo un admin puede crear administradores o modificar a un
         # admin; así un colaborador con permiso "usuarios" no puede escalar privilegios
         if not es_admin(usuario_sesion) and (rol == 'admin' or es_admin(usuario_actual)):
             errores.append('Solo un administrador puede crear o modificar administradores.')
+        # SEGURIDAD: nadie puede desactivarse ni quitarse el rol de admin a sí
+        # mismo (evita quedar por fuera del aplicativo por error)
+        if usuario_actual and usuario_actual['id'] == usuario_sesion['id'] and \
+                (estado != 'Activo' or (es_admin(usuario_sesion) and rol != 'admin')):
+            errores.append('No puedes desactivarte ni quitarte el rol de administrador a ti mismo.')
+        # SEGURIDAD: siempre debe quedar al menos un administrador activo
+        if usuario_actual and es_admin(usuario_actual) and (rol != 'admin' or estado != 'Activo'):
+            cur.execute("SELECT COUNT(*) AS n FROM usuario WHERE LOWER(rol)='admin' AND estado='Activo' AND id<>%s", (id_usuario,))
+            if cur.fetchone()['n'] == 0:
+                errores.append('Debe quedar al menos un administrador activo.')
         # SEGURIDAD: el correo es el usuario de login, no puede repetirse
         if correo:
             cur.execute("SELECT id FROM usuario WHERE LOWER(correo) = LOWER(%s) AND id <> %s", (correo, id_usuario or 0))
             if cur.fetchone():
                 errores.append('Ya existe un usuario con ese correo.')
+        # SEGURIDAD: el documento tampoco se repite; se compara por la huella,
+        # sin necesidad de descifrar los documentos de los demás
+        if documento and REGEX_DOCUMENTO.match(documento):
+            cur.execute("SELECT id FROM usuario WHERE documento_huella = %s AND id <> %s",
+                        (huella_documento(documento), id_usuario or 0))
+            if cur.fetchone():
+                errores.append('Ya existe un usuario con ese documento.')
 
         if errores:
             mensaje = ' '.join(errores)
@@ -1539,12 +1693,20 @@ def usuarios():
             else:
                 # Mantener permisos existentes si es colaborador
                 permisos = usuario_actual['permisos'] or ''
-            cur.execute("UPDATE usuario SET documento=%s, nombres=%s, apellidos=%s, rol=%s, celular=%s, correo=%s, estado=%s, funcion=%s, permisos=%s WHERE id=%s",
-                (documento, nombres, apellidos, rol, celular, correo, estado, funcion, permisos, id_usuario))
+            cur.execute("UPDATE usuario SET nombres=%s, apellidos=%s, rol=%s, correo=%s, estado=%s, funcion=%s, permisos=%s WHERE id=%s",
+                (nombres, apellidos, rol, correo, estado, funcion, permisos, id_usuario))
+            # Documento y celular solo se cambian si se escribieron (se guardan cifrados)
+            if documento:
+                cur.execute("UPDATE usuario SET documento=%s, documento_huella=%s WHERE id=%s",
+                            (cifrar_dato(documento), huella_documento(documento), id_usuario))
+            if celular:
+                cur.execute("UPDATE usuario SET celular=%s WHERE id=%s", (cifrar_dato(celular), id_usuario))
             if contrasena:
                 # SEGURIDAD: la contraseña se guarda cifrada
                 cur.execute("UPDATE usuario SET contrasena=%s WHERE id=%s", (generate_password_hash(contrasena), id_usuario))
             conn.commit()
+            # SEGURIDAD: queda registro de quién modificó a quién (sin los datos)
+            app.logger.info('Usuario %s actualizado por %s', id_usuario, usuario_sesion['correo'])
             mensaje = 'Usuario actualizado.'
         else:  # Crear
             # Nuevos usuarios colaboradores sin permisos
@@ -1552,15 +1714,48 @@ def usuarios():
                 permisos = ','.join(PANELES)
             else:
                 permisos = ''  # Colaborador sin permisos inicialmente
-            cur.execute("INSERT INTO usuario (documento, nombres, apellidos, rol, celular, correo, contrasena, estado, funcion, permisos) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-                (documento, nombres, apellidos, rol, celular, correo, generate_password_hash(contrasena), estado, funcion, permisos))
+            cur.execute("""INSERT INTO usuario (documento, documento_huella, nombres, apellidos, rol, celular, correo,
+                                                contrasena, estado, funcion, permisos)
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+                (cifrar_dato(documento), huella_documento(documento), nombres, apellidos, rol,
+                 cifrar_dato(celular) if celular else '', correo, generate_password_hash(contrasena), estado, funcion, permisos))
+            nuevo_id = cur.fetchone()['id']
             conn.commit()
+            app.logger.info('Usuario %s creado por %s', nuevo_id, usuario_sesion['correo'])
             mensaje = 'Usuario creado.'
-    cur.execute(f"SELECT {COLUMNAS_USUARIO_PUBLICAS} FROM usuario ORDER BY id")
-    usuarios = cur.fetchall()
+
+    cur.execute(f"SELECT {COLUMNAS_USUARIO_PUBLICAS}, documento, celular FROM usuario ORDER BY id")
+    usuarios = []
+    for fila in cur.fetchall():
+        # SEGURIDAD: a la página solo llegan los datos enmascarados
+        documento, celular = descifrar_dato(fila.pop('documento')), descifrar_dato(fila.pop('celular'))
+        fila['documento_mascara'] = enmascarar(documento)
+        fila['celular_mascara'] = enmascarar(celular)
+        usuarios.append(fila)
     cur.close()
     conn.close()
-    return render_template('usuarios.html', usuarios=usuarios, mensaje=mensaje)
+    return render_template('usuarios.html', usuarios=usuarios, mensaje=mensaje, es_admin=es_admin(usuario_sesion))
+
+# --- API: ver los datos personales completos de un usuario (solo admin) ---
+# La usa el botón "Editar" para llenar documento y celular. Cada consulta
+# queda registrada en el log con quién vio los datos de quién.
+@app.route('/api/usuarios/<int:id_usuario>/datos', methods=['POST'])
+def api_usuario_datos(id_usuario):
+    usuario_sesion = obtener_usuario_actual()
+    # SEGURIDAD: solo administradores ven documento y celular completos.
+    # Se usa POST (con token CSRF) para que otra página no pueda pedirlos.
+    if not tiene_permiso('usuarios') or not es_admin(usuario_sesion):
+        return jsonify({'ok': False, 'msg': 'Solo un administrador puede ver los datos personales completos.'}), 403
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT documento, celular FROM usuario WHERE id=%s", (id_usuario,))
+    fila = cur.fetchone()
+    cur.close()
+    conn.close()
+    if not fila:
+        return jsonify({'ok': False, 'msg': 'El usuario no existe.'}), 404
+    app.logger.info('Datos personales del usuario %s consultados por %s', id_usuario, usuario_sesion['correo'])
+    return jsonify({'ok': True, 'documento': descifrar_dato(fila['documento']), 'celular': descifrar_dato(fila['celular'])})
 
 # --- PANEL: Conceder permisos ---
 @app.route('/permisos', methods=['GET', 'POST'])
