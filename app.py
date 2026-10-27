@@ -796,101 +796,425 @@ def inventario():
 # --- Registro de Ventas ---
 
 
-# --- Registro de Ventas mejorado ---
+# =====================================================================
+# MÓDULO: Gestión de ventas (ocupaciones rápidas con placa y productos)
+# ---------------------------------------------------------------------
+# Cada vez que un cliente toma una habitación se crea una "ocupación":
+# la estadía completa, con la placa del vehículo, el tiempo (rato o
+# amanecida), la hora de entrada, los productos consumidos y el cobro final.
+#
+# Flujo rápido desde el tablero de habitaciones:
+#   - Habitación libre:   escribir la placa + clic en "Rato" o "Amanecida".
+#   - Habitación ocupada: "+ Productos" (tocar cada producto suma 1) y
+#                         "Cobrar y liberar" (muestra el total y lo confirma).
+#   - Habitación sucia:   clic en "Limpia" y vuelve a quedar libre.
+#   - Buscador de placa:  resalta la habitación donde está un vehículo.
+#
+# Resumen de lo que se agregó para este módulo:
+#   - Tabla nueva: ocupacion. La tabla venta recibe la columna id_ocupacion
+#     para saber a qué estadía pertenece cada producto.
+#   - Rutas: /ventas (tablero) y las APIs /api/ventas/ocupar, /productos,
+#     /quitar_producto, /cobrar, /limpiar y /anular.
+#
+# SEGURIDAD:
+#   - Solo entra quien tenga el permiso "ventas".
+#   - Los precios SIEMPRE se toman de la BD, nunca de lo que envía el
+#     navegador, así nadie puede cobrar menos modificando la página.
+#   - La placa se guarda CIFRADA (es un dato que identifica a los clientes;
+#     en un motel la discreción es clave). Para buscarla se usa una huella
+#     HMAC, igual que el documento en el módulo de usuarios.
+#   - Ocupar, descontar inventario y cobrar se hacen con consultas
+#     "atómicas": si dos personas tocan la misma habitación a la vez, solo
+#     una lo logra; y el stock nunca puede quedar negativo.
+#   - Quitar un producto devuelve las unidades al inventario. Anular una
+#     ocupación completa es solo para administradores.
+#   - Todas las acciones quedan en el log con quién las hizo.
+# =====================================================================
 
-# Carrito de productos por habitación en sesión
-@app.route('/ventas', methods=['GET', 'POST'])
+# Duración de cada tipo de tiempo, en horas (para el temporizador)
+DURACION_TIEMPOS = {'rato': 4, 'amanecida': 12}
+# SEGURIDAD: formato de placa colombiana sin espacios ni guiones:
+# carros "ABC123", motos "ABC12D". Se acepta 5 a 7 letras/números para
+# placas especiales o extranjeras.
+REGEX_PLACA = re.compile(r'^[A-Z0-9]{5,7}$')
+MAX_PRODUCTOS_POR_ENVIO = 30
+
+# Indica si ya se revisó que exista la tabla de ocupaciones (una vez por arranque)
+_tablas_ventas_listas = False
+
+# Crea la tabla ocupacion y enlaza la tabla venta con ella.
+#   - ocupacion: una fila por cada estadía. "estado" es Activa mientras el
+#     cliente está en la habitación, Cerrada cuando ya pagó y Anulada si se
+#     registró por error. La placa va cifrada y su huella sirve para buscar.
+#   - venta.id_ocupacion: a qué estadía pertenece cada producto vendido.
+#   - El índice único parcial impide que una habitación tenga dos
+#     ocupaciones activas al mismo tiempo, aunque dos personas hagan clic a la vez.
+def asegurar_tablas_ventas(conn):
+    global _tablas_ventas_listas
+    if _tablas_ventas_listas:
+        return
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS ocupacion (
+            id SERIAL PRIMARY KEY,
+            id_habitacion INTEGER NOT NULL REFERENCES habitacion(id),
+            placa_cifrada TEXT NOT NULL DEFAULT '',
+            placa_huella VARCHAR(64) NOT NULL DEFAULT '',
+            tiempo VARCHAR(20) NOT NULL,
+            precio_habitacion NUMERIC(12,2) NOT NULL,
+            hora_entrada TIMESTAMP NOT NULL DEFAULT NOW(),
+            hora_salida TIMESTAMP,
+            estado VARCHAR(20) NOT NULL DEFAULT 'Activa',
+            total NUMERIC(12,2),
+            id_turno INTEGER REFERENCES turno(id),
+            id_usuario_entrada INTEGER NOT NULL REFERENCES usuario(id),
+            id_usuario_salida INTEGER REFERENCES usuario(id)
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS ocupacion_una_activa_por_habitacion
+            ON ocupacion (id_habitacion) WHERE estado = 'Activa';
+        CREATE INDEX IF NOT EXISTS ocupacion_placa_huella ON ocupacion (placa_huella);
+        ALTER TABLE venta ADD COLUMN IF NOT EXISTS id_ocupacion INTEGER REFERENCES ocupacion(id);
+    """)
+    conn.commit()
+    cur.close()
+    _tablas_ventas_listas = True
+
+# Quita espacios y guiones y pasa a mayúsculas: "abc-123" -> "ABC123"
+def normalizar_placa(valor):
+    return re.sub(r'[\s\-]', '', valor or '').upper()
+
+# SEGURIDAD: huella de la placa (HMAC-SHA256), para buscar un vehículo sin
+# guardar la placa a la vista. Usa una clave distinta a la del documento.
+def huella_placa(placa):
+    clave = hashlib.sha256(b'motelflow|huella-placa|' + os.environ['NOMINA_CLAVE'].encode('ascii')).digest()
+    return hmac.new(clave, placa.encode('utf-8'), hashlib.sha256).hexdigest()
+
+# Convierte una hora guardada en la BD (UTC) a milisegundos, el formato que
+# usa el temporizador de la página. Así el tiempo es el mismo en cualquier
+# equipo (antes se guardaba solo en el navegador de cada persona).
+def a_milisegundos(dt):
+    return int(dt.replace(tzinfo=timezone.utc).timestamp() * 1000)
+
+# SEGURIDAD: revisión común de todas las APIs de ventas. Devuelve
+# (usuario, None) si puede seguir, o (None, respuesta_de_error).
+def validar_api_ventas():
+    if not tiene_permiso('ventas'):
+        return None, (jsonify({'ok': False, 'msg': 'No autorizado'}), 403)
+    if CIFRADOR_NOMINA is None:
+        return None, (jsonify({'ok': False, 'msg': 'Falta la clave de cifrado NOMINA_CLAVE.'}), 503)
+    return obtener_usuario_actual(), None
+
+def respuesta_error(mensaje, codigo=400):
+    return jsonify({'ok': False, 'msg': mensaje}), codigo
+
+# --- PANEL: Gestión de ventas (tablero de habitaciones) ---
+@app.route('/ventas')
 def ventas():
     # Validar acceso
     acceso_negado = validar_acceso('ventas')
     if acceso_negado:
         return acceso_negado
+    usuario_sesion = obtener_usuario_actual()
+    if CIFRADOR_NOMINA is None:
+        return render_template('ventas.html', sin_clave=True)
 
     conn = get_db_connection()
+    asegurar_tablas_ventas(conn)
     cur = conn.cursor()
-    cur.execute("SELECT * FROM inventario ORDER BY nombre")
+    # Productos para el panel rápido (los agotados se muestran deshabilitados)
+    cur.execute("SELECT id, nombre, precio_venta, stock_actual FROM inventario ORDER BY nombre")
     productos = cur.fetchall()
-    cur.execute("SELECT * FROM habitacion ORDER BY numero")
+
+    # Habitaciones con su ocupación activa (si la tienen)
+    cur.execute("""SELECT h.id, h.numero, h.tipo, h.precio_estandar, h.estado,
+                          o.id AS id_ocupacion, o.placa_cifrada, o.tiempo, o.hora_entrada, o.precio_habitacion
+                   FROM habitacion h
+                   LEFT JOIN ocupacion o ON o.id_habitacion = h.id AND o.estado = 'Activa'
+                   ORDER BY h.numero""")
     habitaciones = cur.fetchall()
-    usuario_id = None
-    if 'usuario' in session:
-        cur.execute("SELECT id FROM usuario WHERE correo=%s", (session['usuario'],))
-        u = cur.fetchone()
-        if u:
-            usuario_id = u['id']
-    mensaje = None
-    # Carrito de productos por habitación
-    if 'carrito' not in session:
-        session['carrito'] = {}
-    carrito = session['carrito']
-    if request.method == 'POST':
-        # SEGURIDAD: los identificadores deben ser enteros y la cantidad positiva.
-        # Antes una cantidad negativa AUMENTABA el stock y restaba del recaudo.
-        id_hab_num = leer_entero(request.form.get('id_habitacion'), minimo=1)
-        id_habitacion = str(id_hab_num) if id_hab_num else None
-        id_producto = leer_entero(request.form.get('id_producto'), minimo=1)
-        cantidad = leer_entero(request.form.get('cantidad'), minimo=1, maximo=1000)
-        accion = request.form.get('accion')
-        if not id_habitacion:
-            mensaje = 'Habitación inválida.'
-        elif accion == 'agregar_producto' and id_producto and cantidad:
-            # Agregar producto al carrito
-            if id_habitacion not in carrito:
-                carrito[id_habitacion] = []
-            carrito[id_habitacion].append({'id_producto': id_producto, 'cantidad': cantidad})
-            session['carrito'] = carrito
-            mensaje = 'Producto agregado al carrito.'
-        elif accion == 'registrar_venta' and usuario_id:
-            # Registrar venta solo al ocupar
-            productos_hab = carrito.get(id_habitacion, [])
-            stock_ok = True
-            for item in productos_hab:
-                cur.execute("SELECT precio_venta, stock_actual FROM inventario WHERE id = %s", (item['id_producto'],))
-                prod = cur.fetchone()
-                if not prod or prod['stock_actual'] < item['cantidad']:
-                    mensaje = 'Stock insuficiente para algún producto.'
-                    stock_ok = False
-                    break
-            if stock_ok:
-                total = 0
-                for item in productos_hab:
-                    cur.execute("SELECT precio_venta FROM inventario WHERE id = %s", (item['id_producto'],))
-                    prod = cur.fetchone()
-                    total += float(prod['precio_venta']) * item['cantidad']
-                # Sumar valor de la habitación
-                cur.execute("SELECT precio_estandar FROM habitacion WHERE id = %s", (id_habitacion,))
-                hab = cur.fetchone()
-                if hab:
-                    total += float(hab['precio_estandar'])
-                for item in productos_hab:
-                    cur.execute("SELECT precio_venta FROM inventario WHERE id = %s", (item['id_producto'],))
-                    prod = cur.fetchone()
-                    total_pago = float(prod['precio_venta']) * item['cantidad']
-                    cur.execute("INSERT INTO venta (id_usuario, id_habitacion, id_producto, cantidad, total_pago) VALUES (%s, %s, %s, %s, %s)",
-                        (usuario_id, id_habitacion, item['id_producto'], item['cantidad'], total_pago))
-                    cur.execute("UPDATE inventario SET stock_actual = stock_actual - %s WHERE id = %s", (item['cantidad'], item['id_producto']))
-                # Actualizar recaudo total del turno si es colaborador con turno abierto
-                if 'turno_id' in session and session.get('rol', '').lower() == 'colaborador':
-                    cur.execute("UPDATE turno SET recaudo_total = COALESCE(recaudo_total, 0) + %s WHERE id = %s", (total, session['turno_id']))
-                conn.commit()
-                mensaje = f'Venta registrada. Total: ${total}'
-                carrito.pop(id_habitacion, None)
-                session['carrito'] = carrito
-        else:
-            mensaje = 'Acción no válida o datos incompletos.'
-    # Mostrar ventas
-    cur.execute("""
-        SELECT v.*, u.nombres as usuario, h.numero as habitacion, i.nombre as producto
-        FROM venta v
-        JOIN usuario u ON v.id_usuario = u.id
-        LEFT JOIN habitacion h ON v.id_habitacion = h.id
-        JOIN inventario i ON v.id_producto = i.id
-        ORDER BY v.fecha_venta DESC
-    """)
-    ventas = cur.fetchall()
+
+    # Productos consumidos en cada ocupación activa
+    cur.execute("""SELECT v.id, v.id_ocupacion, v.cantidad, v.total_pago, i.nombre
+                   FROM venta v JOIN inventario i ON i.id = v.id_producto
+                   JOIN ocupacion o ON o.id = v.id_ocupacion AND o.estado = 'Activa'
+                   ORDER BY v.id""")
+    consumos = {}
+    for c in cur.fetchall():
+        consumos.setdefault(c['id_ocupacion'], []).append(c)
+
+    # "cuentas" resume cada cuenta abierta para la ventana de cobro de la
+    # página (solo para mostrar; el total real lo vuelve a calcular el servidor)
+    cuentas = {}
+    for h in habitaciones:
+        if h['id_ocupacion']:
+            h['placa'] = descifrar_dato(h['placa_cifrada'])
+            h['consumo'] = consumos.get(h['id_ocupacion'], [])
+            h['total_productos'] = sum(c['total_pago'] for c in h['consumo'])
+            h['total'] = h['precio_habitacion'] + h['total_productos']
+            h['entrada_ms'] = a_milisegundos(h['hora_entrada'])
+            h['entrada_local'] = convertir_a_hora_local(h['hora_entrada'])
+            h['duracion_ms'] = DURACION_TIEMPOS.get(h['tiempo'], 4) * 3600 * 1000
+            cuentas[h['id_ocupacion']] = {
+                'numero': h['numero'], 'placa': h['placa'], 'tiempo': h['tiempo'],
+                'precio_habitacion': float(h['precio_habitacion']), 'total': float(h['total']),
+                'consumo': [{'cantidad': c['cantidad'], 'nombre': c['nombre'], 'total': float(c['total_pago'])} for c in h['consumo']],
+            }
+        h.pop('placa_cifrada', None)
+
+    # Historial: últimas 50 estadías cerradas o anuladas
+    cur.execute("""SELECT o.id, o.placa_cifrada, o.tiempo, o.hora_entrada, o.hora_salida, o.estado,
+                          o.precio_habitacion, o.total, h.numero, u.nombres AS empleado
+                   FROM ocupacion o JOIN habitacion h ON h.id = o.id_habitacion
+                   LEFT JOIN usuario u ON u.id = COALESCE(o.id_usuario_salida, o.id_usuario_entrada)
+                   WHERE o.estado <> 'Activa'
+                   ORDER BY o.hora_salida DESC NULLS LAST, o.id DESC LIMIT 50""")
+    historial = cur.fetchall()
+    for o in historial:
+        o['placa'] = descifrar_dato(o.pop('placa_cifrada'))
+        o['entrada_local'] = convertir_a_hora_local(o['hora_entrada'])
+        o['salida_local'] = convertir_a_hora_local(o['hora_salida'])
     cur.close()
     conn.close()
-    return render_template('ventas.html', productos=productos, habitaciones=habitaciones, ventas=ventas, mensaje=mensaje, carrito=carrito)
+    return render_template('ventas.html', habitaciones=habitaciones, productos=productos, historial=historial,
+                           cuentas=cuentas, es_admin=es_admin(usuario_sesion), ahora_ms=int(time.time() * 1000))
+
+# --- API: Ocupar una habitación (placa + tiempo, un solo clic) ---
+# Recibe {"id_habitacion": 3, "placa": "ABC123", "tiempo": "rato"}
+@app.route('/api/ventas/ocupar', methods=['POST'])
+def api_ventas_ocupar():
+    usuario, error = validar_api_ventas()
+    if error:
+        return error
+    data = request.get_json(silent=True) or {}
+    id_habitacion = leer_entero(data.get('id_habitacion'), minimo=1)
+    placa = normalizar_placa(data.get('placa'))
+    tiempo = data.get('tiempo')
+    # SEGURIDAD: datos válidos antes de tocar la BD. La placa puede ir vacía
+    # (cliente a pie o en taxi), pero si se escribe debe tener formato de placa.
+    if not id_habitacion or tiempo not in DURACION_TIEMPOS:
+        return respuesta_error('Habitación o tiempo inválido.')
+    if placa and not REGEX_PLACA.match(placa):
+        return respuesta_error('Placa inválida: debe tener de 5 a 7 letras y números (ej. ABC123).')
+
+    conn = get_db_connection()
+    asegurar_tablas_ventas(conn)
+    cur = conn.cursor()
+    try:
+        # SEGURIDAD: "WHERE estado = 'Libre'" hace la operación atómica: si dos
+        # personas ocupan la misma habitación a la vez, solo una lo logra.
+        cur.execute("""UPDATE habitacion SET estado = 'Ocupada', tiempo = %s
+                       WHERE id = %s AND estado = 'Libre' RETURNING precio_estandar, numero""", (tiempo, id_habitacion))
+        habitacion = cur.fetchone()
+        if not habitacion:
+            conn.rollback()
+            return respuesta_error('La habitación no está libre (puede que alguien la acabe de ocupar).', 409)
+        # El precio sale de la BD, no del navegador
+        cur.execute("""INSERT INTO ocupacion (id_habitacion, placa_cifrada, placa_huella, tiempo, precio_habitacion, id_usuario_entrada)
+                       VALUES (%s, %s, %s, %s, %s, %s) RETURNING id""",
+                    (id_habitacion, cifrar_dato(placa) if placa else '', huella_placa(placa) if placa else '',
+                     tiempo, habitacion['precio_estandar'], usuario['id']))
+        id_ocupacion = cur.fetchone()['id']
+        conn.commit()
+    finally:
+        cur.close()
+        conn.close()
+    app.logger.info('Habitación %s ocupada (ocupación %s, %s) por %s', habitacion['numero'], id_ocupacion, tiempo, usuario['correo'])
+    return jsonify({'ok': True, 'id_ocupacion': id_ocupacion})
+
+# --- API: Agregar productos a una ocupación ---
+# Recibe {"id_ocupacion": 7, "items": [{"id_producto": 3, "cantidad": 2}, ...]}
+# Cada producto se registra como una venta y se descuenta del inventario.
+@app.route('/api/ventas/productos', methods=['POST'])
+def api_ventas_productos():
+    usuario, error = validar_api_ventas()
+    if error:
+        return error
+    data = request.get_json(silent=True) or {}
+    id_ocupacion = leer_entero(data.get('id_ocupacion'), minimo=1)
+    items = data.get('items')
+    # SEGURIDAD: lista con un tamaño razonable, ids y cantidades enteras positivas
+    if not id_ocupacion or not isinstance(items, list) or not 0 < len(items) <= MAX_PRODUCTOS_POR_ENVIO:
+        return respuesta_error('Datos inválidos.')
+    cantidades = {}
+    for item in items:
+        if not isinstance(item, dict):
+            return respuesta_error('Datos inválidos.')
+        id_producto = leer_entero(item.get('id_producto'), minimo=1)
+        cantidad = leer_entero(item.get('cantidad'), minimo=1, maximo=100)
+        if not id_producto or not cantidad:
+            return respuesta_error('Producto o cantidad inválida.')
+        cantidades[id_producto] = cantidades.get(id_producto, 0) + cantidad
+
+    conn = get_db_connection()
+    asegurar_tablas_ventas(conn)
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT id_habitacion FROM ocupacion WHERE id = %s AND estado = 'Activa'", (id_ocupacion,))
+        ocupacion = cur.fetchone()
+        if not ocupacion:
+            return respuesta_error('La habitación ya no está ocupada.', 409)
+        for id_producto, cantidad in cantidades.items():
+            # SEGURIDAD: descuento atómico; "stock_actual >= cantidad" impide
+            # vender más de lo que hay y que el inventario quede negativo.
+            # El precio se toma de la BD.
+            cur.execute("""UPDATE inventario SET stock_actual = stock_actual - %s
+                           WHERE id = %s AND stock_actual >= %s RETURNING nombre, precio_venta""",
+                        (cantidad, id_producto, cantidad))
+            producto = cur.fetchone()
+            if not producto:
+                # Si un producto falla, no se guarda ninguno (rollback)
+                conn.rollback()
+                cur.execute("SELECT nombre, stock_actual FROM inventario WHERE id = %s", (id_producto,))
+                info = cur.fetchone()
+                if not info:
+                    return respuesta_error('Uno de los productos no existe.')
+                return respuesta_error(f"No hay suficiente {info['nombre']}: quedan {info['stock_actual']}.", 409)
+            cur.execute("""INSERT INTO venta (id_usuario, id_habitacion, id_producto, cantidad, total_pago, id_ocupacion)
+                           VALUES (%s, %s, %s, %s, %s, %s)""",
+                        (usuario['id'], ocupacion['id_habitacion'], id_producto, cantidad,
+                         producto['precio_venta'] * cantidad, id_ocupacion))
+        conn.commit()
+    finally:
+        cur.close()
+        conn.close()
+    app.logger.info('Productos agregados a la ocupación %s por %s', id_ocupacion, usuario['correo'])
+    return jsonify({'ok': True})
+
+# --- API: Quitar un producto mal registrado (antes de cobrar) ---
+# Recibe {"id_venta": 15}. Devuelve las unidades al inventario.
+@app.route('/api/ventas/quitar_producto', methods=['POST'])
+def api_ventas_quitar_producto():
+    usuario, error = validar_api_ventas()
+    if error:
+        return error
+    id_venta = leer_entero((request.get_json(silent=True) or {}).get('id_venta'), minimo=1)
+    if not id_venta:
+        return respuesta_error('Producto inválido.')
+    conn = get_db_connection()
+    asegurar_tablas_ventas(conn)
+    cur = conn.cursor()
+    try:
+        # SEGURIDAD: solo se pueden quitar productos de una estadía que sigue
+        # activa; lo ya cobrado no se modifica
+        cur.execute("""DELETE FROM venta v USING ocupacion o
+                       WHERE v.id = %s AND o.id = v.id_ocupacion AND o.estado = 'Activa'
+                       RETURNING v.id_producto, v.cantidad""", (id_venta,))
+        venta = cur.fetchone()
+        if not venta:
+            conn.rollback()
+            return respuesta_error('Ese producto ya no se puede quitar (la cuenta está cerrada).', 409)
+        cur.execute("UPDATE inventario SET stock_actual = stock_actual + %s WHERE id = %s", (venta['cantidad'], venta['id_producto']))
+        conn.commit()
+    finally:
+        cur.close()
+        conn.close()
+    app.logger.info('Venta %s quitada (stock devuelto) por %s', id_venta, usuario['correo'])
+    return jsonify({'ok': True})
+
+# --- API: Cobrar y liberar ---
+# Recibe {"id_ocupacion": 7}. Calcula el total en el servidor (habitación +
+# productos), cierra la estadía, suma el cobro al turno abierto de quien
+# cobra y deja la habitación "Sucia" para el aseo.
+@app.route('/api/ventas/cobrar', methods=['POST'])
+def api_ventas_cobrar():
+    usuario, error = validar_api_ventas()
+    if error:
+        return error
+    id_ocupacion = leer_entero((request.get_json(silent=True) or {}).get('id_ocupacion'), minimo=1)
+    if not id_ocupacion:
+        return respuesta_error('Ocupación inválida.')
+    turno = obtener_turno_abierto_usuario(usuario['id'])
+    conn = get_db_connection()
+    asegurar_tablas_ventas(conn)
+    cur = conn.cursor()
+    try:
+        # SEGURIDAD: el total se calcula en la misma consulta que cierra la
+        # cuenta, con los valores de la BD (habitación + suma de productos).
+        # "AND estado = 'Activa'" evita cobrar dos veces la misma estadía.
+        cur.execute("""UPDATE ocupacion SET estado = 'Cerrada', hora_salida = NOW(), id_usuario_salida = %s, id_turno = %s,
+                           total = precio_habitacion + (SELECT COALESCE(SUM(total_pago), 0) FROM venta WHERE id_ocupacion = %s)
+                       WHERE id = %s AND estado = 'Activa' RETURNING id_habitacion, total""",
+                    (usuario['id'], turno['id'] if turno else None, id_ocupacion, id_ocupacion))
+        cerrada = cur.fetchone()
+        if not cerrada:
+            conn.rollback()
+            return respuesta_error('Esta habitación ya fue cobrada.', 409)
+        cur.execute("UPDATE habitacion SET estado = 'Sucia', tiempo = NULL WHERE id = %s", (cerrada['id_habitacion'],))
+        # El cobro se suma al recaudo del turno abierto de quien cobra
+        if turno:
+            cur.execute("UPDATE turno SET recaudo_total = COALESCE(recaudo_total, 0) + %s WHERE id = %s",
+                        (cerrada['total'], turno['id']))
+        conn.commit()
+    finally:
+        cur.close()
+        conn.close()
+    app.logger.info('Ocupación %s cobrada ($%s) por %s', id_ocupacion, cerrada['total'], usuario['correo'])
+    return jsonify({'ok': True, 'total': formato_pesos(cerrada['total']), 'con_turno': bool(turno)})
+
+# --- API: Marcar una habitación como limpia (Sucia -> Libre) ---
+# También sirve para liberar una habitación que quedó "Ocupada" sin
+# registro de ocupación (datos de la versión anterior del módulo).
+@app.route('/api/ventas/limpiar', methods=['POST'])
+def api_ventas_limpiar():
+    usuario, error = validar_api_ventas()
+    if error:
+        return error
+    id_habitacion = leer_entero((request.get_json(silent=True) or {}).get('id_habitacion'), minimo=1)
+    if not id_habitacion:
+        return respuesta_error('Habitación inválida.')
+    conn = get_db_connection()
+    asegurar_tablas_ventas(conn)
+    cur = conn.cursor()
+    # SEGURIDAD: nunca se libera una habitación con una estadía activa
+    # (primero hay que cobrarla o anularla)
+    cur.execute("""UPDATE habitacion SET estado = 'Libre', tiempo = NULL
+                   WHERE id = %s AND estado IN ('Sucia', 'Ocupada')
+                     AND NOT EXISTS (SELECT 1 FROM ocupacion WHERE id_habitacion = %s AND estado = 'Activa')
+                   RETURNING numero""", (id_habitacion, id_habitacion))
+    habitacion = cur.fetchone()
+    conn.commit()
+    cur.close()
+    conn.close()
+    if not habitacion:
+        return respuesta_error('No se puede liberar: la habitación tiene una cuenta abierta.', 409)
+    app.logger.info('Habitación %s marcada como libre por %s', habitacion['numero'], usuario['correo'])
+    return jsonify({'ok': True})
+
+# --- API: Anular una ocupación registrada por error (solo admin) ---
+# Devuelve al inventario los productos, deja la estadía como "Anulada"
+# (no se borra, queda en el historial) y libera la habitación.
+@app.route('/api/ventas/anular', methods=['POST'])
+def api_ventas_anular():
+    usuario, error = validar_api_ventas()
+    if error:
+        return error
+    # SEGURIDAD: anular borra un cobro, por eso solo un administrador puede hacerlo
+    if not es_admin(usuario):
+        return respuesta_error('Solo un administrador puede anular una ocupación.', 403)
+    id_ocupacion = leer_entero((request.get_json(silent=True) or {}).get('id_ocupacion'), minimo=1)
+    if not id_ocupacion:
+        return respuesta_error('Ocupación inválida.')
+    conn = get_db_connection()
+    asegurar_tablas_ventas(conn)
+    cur = conn.cursor()
+    try:
+        cur.execute("""UPDATE ocupacion SET estado = 'Anulada', hora_salida = NOW(), id_usuario_salida = %s, total = 0
+                       WHERE id = %s AND estado = 'Activa' RETURNING id_habitacion""", (usuario['id'], id_ocupacion))
+        anulada = cur.fetchone()
+        if not anulada:
+            conn.rollback()
+            return respuesta_error('Solo se puede anular una ocupación activa.', 409)
+        # Los productos vuelven al inventario y sus ventas se eliminan
+        cur.execute("DELETE FROM venta WHERE id_ocupacion = %s RETURNING id_producto, cantidad", (id_ocupacion,))
+        for venta in cur.fetchall():
+            cur.execute("UPDATE inventario SET stock_actual = stock_actual + %s WHERE id = %s", (venta['cantidad'], venta['id_producto']))
+        cur.execute("UPDATE habitacion SET estado = 'Libre', tiempo = NULL WHERE id = %s", (anulada['id_habitacion'],))
+        conn.commit()
+    finally:
+        cur.close()
+        conn.close()
+    app.logger.warning('Ocupación %s ANULADA por %s', id_ocupacion, usuario['correo'])
+    return jsonify({'ok': True})
 
 # =====================================================================
 # MÓDULO: Gestión de nómina

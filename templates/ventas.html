@@ -1,173 +1,329 @@
 {% extends 'header_alt.html' %}
 {% block content %}
+<style>
+    .ventas { padding: 24px 16px; max-width: 1200px; margin: auto; }
+    .ventas .aviso { background: #fff3cd; border: 1px solid #e0c36b; padding: 10px 14px; border-radius: 6px; margin: 10px 0; }
+    .ventas .barra { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; margin-bottom: 16px; }
+    .ventas .barra input { padding: 8px 10px; font-size: 16px; text-transform: uppercase; width: 200px; }
+    .ventas .contador { padding: 4px 10px; border-radius: 12px; font-weight: bold; font-size: 14px; }
+
+    /* Tablero de habitaciones */
+    .ventas .tablero { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 14px; }
+    .ventas .hab { border-radius: 12px; padding: 12px; border: 2px solid transparent; display: flex; flex-direction: column; gap: 8px; }
+    .ventas .hab.libre { background: #d4f7d4; }
+    .ventas .hab.ocupada { background: #ffd6d6; }
+    .ventas .hab.sucia { background: #fff1a8; }
+    .ventas .hab.resaltada { border-color: #1565c0; box-shadow: 0 0 0 4px rgba(21,101,192,.25); }
+    .ventas .hab.oculta { opacity: .25; }
+    .ventas .hab .cabecera { display: flex; justify-content: space-between; align-items: baseline; }
+    .ventas .hab .numero { font-size: 22px; font-weight: bold; }
+    .ventas .hab .tipo { font-size: 13px; color: #555; }
+    .ventas .hab .placa { font-family: monospace; font-size: 20px; font-weight: bold; background: #ffdd00; border: 2px solid #222; border-radius: 4px; padding: 0 6px; display: inline-block; letter-spacing: 2px; }
+    .ventas .hab .timer { font-family: monospace; font-size: 18px; font-weight: bold; }
+    .ventas .hab .timer.vencido { color: #b71c1c; }
+    .ventas .hab input.campo-placa { padding: 8px; font-size: 18px; text-transform: uppercase; letter-spacing: 2px; font-family: monospace; width: 100%; box-sizing: border-box; }
+    .ventas .hab .botones { display: flex; gap: 6px; flex-wrap: wrap; }
+    .ventas .hab .botones button { flex: 1; padding: 9px 6px; font-size: 14px; cursor: pointer; }
+    .ventas .hab .consumo { font-size: 13px; margin: 0; padding-left: 0; list-style: none; }
+    .ventas .hab .consumo li { display: flex; justify-content: space-between; gap: 6px; align-items: center; }
+    .ventas .hab .consumo button { padding: 0 6px; font-size: 12px; cursor: pointer; }
+    .ventas .hab .total { font-size: 18px; font-weight: bold; text-align: right; }
+
+    /* Ventanas (productos y cobro) */
+    .ventas .ventana { position: fixed; inset: 0; background: rgba(0,0,0,.4); display: none; align-items: center; justify-content: center; z-index: 50; }
+    .ventas .ventana.abierta { display: flex; }
+    .ventas .ventana .caja { background: #fff; border-radius: 12px; padding: 18px; width: calc(100% - 32px); max-width: 560px; max-height: 90vh; overflow-y: auto; }
+    .ventas .productos { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; margin: 12px 0; }
+    .ventas .producto { position: relative; padding: 10px; border-radius: 8px; border: 1px solid #999; background: #f7f7f7; cursor: pointer; text-align: left; font-size: 14px; }
+    .ventas .producto:disabled { opacity: .45; cursor: not-allowed; }
+    .ventas .producto.elegido { background: #d4f7d4; border-color: #2e7d32; }
+    .ventas .producto .cantidad { position: absolute; top: -8px; right: -8px; background: #2e7d32; color: #fff; border-radius: 50%; min-width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; font-weight: bold; }
+    .ventas .producto .menos { position: absolute; bottom: 4px; right: 4px; padding: 0 7px; font-weight: bold; }
+    .ventas .resumen td { padding: 3px 6px; }
+    .ventas .error { color: #b71c1c; min-height: 1em; }
+    .ventas table.historial { width: 100%; border-collapse: collapse; font-size: 14px; margin-top: 10px; }
+    .ventas table.historial th, .ventas table.historial td { border: 1px solid #999; padding: 4px 6px; }
+</style>
 <div class="panel-central">Gestión de Ventas</div>
-<main>
-    <div style="padding:32px;max-width:1100px;margin:auto;">
-        <h2>Panel de Habitaciones</h2>
-        <div id="habitaciones-grid" style="display:flex;flex-wrap:wrap;gap:18px;justify-content:center;">
-            {% for hab in habitaciones %}
-            <div class="hab-cuadro venta-hab"
-                data-id="{{hab.id}}" data-estado="{{hab.estado}}" data-numero="{{hab.numero}}" data-tipo="{{hab.tipo}}" data-tiempo="{{hab.tiempo}}"
-                style="width:120px;height:120px;display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer;
-                border-radius:12px;font-weight:bold;font-size:1.1rem;
-                background:{% if hab.estado=='Ocupada' %}#ffb3b3{% elif hab.estado=='Sucia' %}#ffe066{% else %}#b3ffb3{% endif %};">
-                <span>Hab {{hab.numero}}</span>
-                <span style="font-size:0.9rem;font-weight:400;">{{hab.tipo}}</span>
-                <span class="venta-timer" id="timer-{{hab.id}}"></span>
-                <span style="font-size:0.9rem;">{{hab.estado}}</span>
-            </div>
-            {% endfor %}
-        </div>
+<div class="ventas">
+    {% if sin_clave %}
+    <div class="aviso">El módulo de ventas está deshabilitado porque falta la clave de cifrado <code>NOMINA_CLAVE</code> (las placas se guardan cifradas).</div>
+    {% else %}
 
-        <!-- Modal de acción -->
-        <div id="modal-accion" class="modal" style="display:none;">
-            <div class="modal-content">
-                <h2>¿Qué deseas hacer con la habitación <span id="modal-hab-num"></span>?</h2>
-                <button onclick="abrirModalHabitacion()">Habitación</button>
-                <button onclick="abrirModalProductos()">Productos</button>
-                <button onclick="cerrarModalAccion()">Cancelar</button>
-            </div>
-        </div>
-        <!-- Modal de estado habitación -->
-        <div id="modal-habitacion" class="modal" style="display:none;">
-            <div class="modal-content">
-                <h2>Cambiar estado habitación</h2>
-                <button onclick="cambiarEstado('Ocupada')">Ocupar</button>
-                <button onclick="cambiarEstado('Sucia')">Liberar</button>
-                <button onclick="cambiarEstado('Libre')">Limpiar</button>
-                <button onclick="cerrarModalHabitacion()">Cancelar</button>
-            </div>
-        </div>
-        <!-- Modal de tiempo (rato/amanecida) -->
-        <div id="modal-tiempo" class="modal" style="display:none;">
-            <div class="modal-content">
-                <h2>Selecciona tiempo de ocupación</h2>
-                <button onclick="setTiempo('rato')">Rato (4h)</button>
-                <button onclick="setTiempo('amanecida')">Amanecida (12h)</button>
-            </div>
-        </div>
-        <!-- Modal de productos -->
-        <div id="modal-productos" class="modal" style="display:none;">
-            <div class="modal-content">
-                <h2>Agregar productos a la venta</h2>
-                <form id="form-producto" method="post">
-                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                    <input type="hidden" name="accion" value="registrar_venta">
-                    <input type="hidden" name="id_habitacion" id="form-id-hab">
-                    <select name="id_producto" required>
-                        <option value="">Producto</option>
-                        {% for p in productos %}
-                        <option value="{{p.id}}">{{p.nombre}} (Stock: {{p.stock_actual}})</option>
-                        {% endfor %}
-                    </select>
-                    <input type="number" name="cantidad" placeholder="Cantidad" min="1" required>
-                    <button type="submit">Registrar Venta</button>
-                    <button type="button" onclick="cerrarModalProductos()">Cancelar</button>
-                </form>
-            </div>
-        </div>
+    <!-- Buscador de placa y conteo de habitaciones -->
+    <div class="barra">
+        <input type="search" id="buscar-placa" placeholder="🔍 Buscar placa" maxlength="10" autocomplete="off">
+        {% set libres = habitaciones|selectattr('estado', 'equalto', 'Libre')|list|length %}
+        {% set ocupadas = habitaciones|selectattr('estado', 'equalto', 'Ocupada')|list|length %}
+        {% set sucias = habitaciones|selectattr('estado', 'equalto', 'Sucia')|list|length %}
+        <span class="contador" style="background:#d4f7d4">{{ libres }} libres</span>
+        <span class="contador" style="background:#ffd6d6">{{ ocupadas }} ocupadas</span>
+        <span class="contador" style="background:#fff1a8">{{ sucias }} por limpiar</span>
+    </div>
 
-        <h3 style="margin-top:40px;">Historial de Ventas</h3>
-        <table border="1" style="width:100%;margin-top:18px;">
-            <tr><th>Fecha</th><th>Empleado</th><th>Habitación</th><th>Producto</th><th>Cantidad</th><th>Total</th></tr>
-            {% for v in ventas %}
+    <!-- ===================== Tablero de habitaciones ===================== -->
+    <div class="tablero">
+        {% for h in habitaciones %}
+        {% if h.id_ocupacion %}
+        <!-- Habitación ocupada: placa, tiempo restante, consumo y cobro -->
+        <div class="hab ocupada" data-placa="{{ h.placa }}">
+            <div class="cabecera"><span class="numero">{{ h.numero }}</span><span class="tipo">{{ h.tipo }} · {{ h.tiempo|capitalize }}</span></div>
+            <div>{% if h.placa %}<span class="placa">{{ h.placa }}</span>{% else %}<em>Sin vehículo</em>{% endif %}</div>
+            <div>Entró {{ h.entrada_local.strftime('%I:%M %p') }} · <span class="timer" data-fin="{{ h.entrada_ms + h.duracion_ms }}"></span></div>
+            {% if h.consumo %}
+            <ul class="consumo">
+                {% for c in h.consumo %}
+                <li><span>{{ c.cantidad }}× {{ c.nombre }}</span><span>$ {{ c.total_pago|pesos }} <button type="button" title="Quitar (devuelve al inventario)" data-venta="{{ c.id }}" data-nombre="{{ c.nombre }}" onclick="quitarProducto(this)">✕</button></span></li>
+                {% endfor %}
+            </ul>
+            {% endif %}
+            <div class="total">Total $ {{ h.total|pesos }}</div>
+            <div class="botones">
+                <button type="button" onclick="abrirProductos({{ h.id_ocupacion }})">+ Productos</button>
+                <button type="button" onclick="abrirCobro({{ h.id_ocupacion }})">💲 Cobrar y liberar</button>
+                {% if es_admin %}<button type="button" onclick="anular({{ h.id_ocupacion }})" title="Solo administradores">Anular</button>{% endif %}
+            </div>
+        </div>
+        {% elif h.estado == 'Libre' %}
+        <!-- Habitación libre: placa + un clic en el tiempo -->
+        <div class="hab libre">
+            <div class="cabecera"><span class="numero">{{ h.numero }}</span><span class="tipo">{{ h.tipo }} · $ {{ h.precio_estandar|pesos }}</span></div>
+            <input type="text" class="campo-placa" id="placa-{{ h.id }}" placeholder="PLACA" maxlength="8" autocomplete="off"
+                   onkeydown="if (event.key === 'Enter') ocupar({{ h.id }}, 'rato')">
+            <div class="botones">
+                <button type="button" onclick="ocupar({{ h.id }}, 'rato')">Rato (4h)</button>
+                <button type="button" onclick="ocupar({{ h.id }}, 'amanecida')">Amanecida (12h)</button>
+            </div>
+        </div>
+        {% elif h.estado == 'Sucia' %}
+        <div class="hab sucia">
+            <div class="cabecera"><span class="numero">{{ h.numero }}</span><span class="tipo">{{ h.tipo }}</span></div>
+            <div>🧹 Por limpiar</div>
+            <div class="botones"><button type="button" onclick="limpiar({{ h.id }})">✓ Limpia</button></div>
+        </div>
+        {% else %}
+        <!-- Ocupada sin registro (versión anterior del módulo) -->
+        <div class="hab ocupada">
+            <div class="cabecera"><span class="numero">{{ h.numero }}</span><span class="tipo">{{ h.tipo }}</span></div>
+            <div><em>{{ h.estado }} sin registro de placa ni cuenta</em></div>
+            <div class="botones"><button type="button" onclick="limpiar({{ h.id }})">Marcar libre</button></div>
+        </div>
+        {% endif %}
+        {% endfor %}
+    </div>
+    <p style="font-size:13px;color:#555;">Escribe la placa y presiona <strong>Enter</strong> para un rato, o el botón de amanecida. Sin placa = cliente sin vehículo.</p>
+    <p class="error" id="error-general"></p>
+
+    <!-- ===================== Historial ===================== -->
+    <h2>Últimas cuentas cerradas</h2>
+    <div style="overflow-x:auto;">
+        <table class="historial">
+            <tr><th>Hab.</th><th>Placa</th><th>Tiempo</th><th>Entrada</th><th>Salida</th><th>Habitación</th><th>Total</th><th>Estado</th><th>Cobró</th></tr>
+            {% for o in historial %}
             <tr>
-                <td>{{v.fecha_venta}}</td>
-                <td>{{v.usuario}}</td>
-                <td>{{v.habitacion or '-'}}</td>
-                <td>{{v.producto}}</td>
-                <td>{{v.cantidad}}</td>
-                <td>${{v.total_pago}}</td>
+                <td>{{ o.numero }}</td>
+                <td>{{ o.placa or '—' }}</td>
+                <td>{{ o.tiempo|capitalize }}</td>
+                <td>{{ o.entrada_local.strftime('%d/%m %I:%M %p') }}</td>
+                <td>{{ o.salida_local.strftime('%d/%m %I:%M %p') if o.salida_local }}</td>
+                <td>$ {{ o.precio_habitacion|pesos }}</td>
+                <td><strong>$ {{ o.total|pesos }}</strong></td>
+                <td>{{ o.estado }}</td>
+                <td>{{ o.empleado }}</td>
             </tr>
+            {% else %}
+            <tr><td colspan="9">Todavía no hay cuentas cerradas.</td></tr>
             {% endfor %}
         </table>
     </div>
-    <script>
-        let habSeleccionada = null;
-        let habIdSeleccionada = null;
-        let accion = null;
-        let tiempoSeleccionado = null;
-        let timers = {};
 
-        // Mostrar modal de acción al clickear habitación
-        document.querySelectorAll('.venta-hab').forEach(el => {
-            el.onclick = function() {
-                habSeleccionada = this;
-                habIdSeleccionada = this.dataset.id;
-                document.getElementById('modal-hab-num').textContent = this.dataset.numero;
-                document.getElementById('modal-accion').style.display = 'block';
-            }
-        });
-        function abrirModalHabitacion() {
-            document.getElementById('modal-accion').style.display = 'none';
-            document.getElementById('modal-habitacion').style.display = 'block';
+    <!-- ===================== Ventana: agregar productos ===================== -->
+    <div class="ventana" id="ventana-productos">
+        <div class="caja">
+            <h3>Productos para la habitación <span id="productos-hab"></span></h3>
+            <input type="search" id="buscar-producto" placeholder="🔍 Buscar producto" autocomplete="off" style="width:100%;padding:8px;box-sizing:border-box;">
+            <div class="productos">
+                {% for p in productos %}
+                <button type="button" class="producto" data-id="{{ p.id }}" data-nombre="{{ p.nombre|lower }}" data-precio="{{ p.precio_venta|float }}"
+                        data-stock="{{ p.stock_actual }}" {% if p.stock_actual <= 0 %}disabled{% endif %}>
+                    <strong>{{ p.nombre }}</strong><br>$ {{ p.precio_venta|pesos }}<br><small>Quedan {{ p.stock_actual }}</small>
+                </button>
+                {% endfor %}
+            </div>
+            <p>Total productos: <strong>$ <span id="productos-total">0</span></strong></p>
+            <p class="error" id="error-productos"></p>
+            <div class="barra">
+                <button type="button" onclick="guardarProductos()">Agregar a la cuenta</button>
+                <button type="button" onclick="cerrar('ventana-productos')">Cancelar</button>
+            </div>
+            <small>Toca un producto para sumar 1 unidad; usa "−" para restar.</small>
+        </div>
+    </div>
+
+    <!-- ===================== Ventana: confirmar cobro ===================== -->
+    <div class="ventana" id="ventana-cobro">
+        <div class="caja">
+            <h3>Cobrar habitación <span id="cobro-hab"></span></h3>
+            <table class="resumen" id="cobro-detalle"></table>
+            <p style="font-size:22px;">Total a cobrar: <strong>$ <span id="cobro-total"></span></strong></p>
+            <p class="error" id="error-cobro"></p>
+            <div class="barra">
+                <button type="button" id="boton-cobrar" onclick="confirmarCobro()">Confirmar cobro y liberar</button>
+                <button type="button" onclick="cerrar('ventana-cobro')">Cancelar</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- SEGURIDAD: datos de las cuentas abiertas como JSON escapado (solo para
+         mostrar el resumen del cobro; el total real lo calcula el servidor) -->
+    <script type="application/json" id="datos-cuentas">
+        {{ {'cuentas': cuentas, 'ahora': ahora_ms}|tojson }}
+    </script>
+    <script>
+        const DATOS = JSON.parse(document.getElementById('datos-cuentas').textContent);
+        const CUENTAS = DATOS.cuentas;  // {id_ocupacion: {numero, placa, tiempo, precio_habitacion, consumo, total}}
+        // Diferencia entre el reloj del servidor y el del equipo, para que el
+        // temporizador sea correcto aunque la hora del computador esté mal
+        const DESFASE = DATOS.ahora - Date.now();
+        const pesos = n => Math.round(n).toLocaleString('es-CO');
+        let ocupacionActual = null;
+        const elegidos = {};
+
+        function cerrar(id) { document.getElementById(id).classList.remove('abierta'); }
+        function mostrarError(id, msg) { document.getElementById(id).textContent = msg; }
+
+        // Envía datos al servidor (el token CSRF se agrega solo) y recarga si todo salió bien
+        async function enviar(url, cuerpo, idError) {
+            const respuesta = await fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(cuerpo)});
+            const datos = await respuesta.json().catch(() => ({ok: false, msg: 'Error de conexión. Intenta de nuevo.'}));
+            if (!datos.ok) { mostrarError(idError, datos.msg); return null; }
+            return datos;
         }
-        function abrirModalProductos() {
-            document.getElementById('modal-accion').style.display = 'none';
-            document.getElementById('modal-productos').style.display = 'block';
-            document.getElementById('form-id-hab').value = habIdSeleccionada;
+
+        // ---- Ocupar: placa + tiempo ----
+        async function ocupar(idHabitacion, tiempo) {
+            const placa = document.getElementById('placa-' + idHabitacion).value;
+            if (await enviar('/api/ventas/ocupar', {id_habitacion: idHabitacion, placa, tiempo}, 'error-general')) location.reload();
         }
-        function cerrarModalAccion() {
-            document.getElementById('modal-accion').style.display = 'none';
+
+        // ---- Limpiar ----
+        async function limpiar(idHabitacion) {
+            if (await enviar('/api/ventas/limpiar', {id_habitacion: idHabitacion}, 'error-general')) location.reload();
         }
-        function cerrarModalHabitacion() {
-            document.getElementById('modal-habitacion').style.display = 'none';
+
+        // ---- Productos ----
+        function abrirProductos(idOcupacion) {
+            ocupacionActual = idOcupacion;
+            Object.keys(elegidos).forEach(k => delete elegidos[k]);
+            document.getElementById('productos-hab').textContent = CUENTAS[idOcupacion].numero;
+            document.getElementById('buscar-producto').value = '';
+            mostrarError('error-productos', '');
+            filtrarProductos('');
+            pintarProductos();
+            document.getElementById('ventana-productos').classList.add('abierta');
+            document.getElementById('buscar-producto').focus();
         }
-        function cerrarModalProductos() {
-            document.getElementById('modal-productos').style.display = 'none';
-        }
-        // Cambiar estado habitación
-        function cambiarEstado(estado) {
-            if (estado === 'Ocupada') {
-                document.getElementById('modal-habitacion').style.display = 'none';
-                document.getElementById('modal-tiempo').style.display = 'block';
-            } else {
-                fetch(`/api/habitacion_estado/${habIdSeleccionada}`, {
-                    method: 'POST',
-                    headers: {'Content-Type':'application/json'},
-                    body: JSON.stringify({estado: estado})
-                }).then(() => location.reload());
-            }
-        }
-        function setTiempo(tipo) {
-            let horas = tipo === 'rato' ? 4 : 12;
-            fetch(`/api/habitacion_estado/${habIdSeleccionada}`, {
-                method: 'POST',
-                headers: {'Content-Type':'application/json'},
-                body: JSON.stringify({estado: 'Ocupada', tiempo: tipo})
-            }).then(() => location.reload());
-        }
-        // Temporizadores
-        function iniciarTimers() {
-            document.querySelectorAll('.venta-hab').forEach(el => {
-                if (el.dataset.estado === 'Ocupada' && el.dataset.tiempo) {
-                    let id = el.dataset.id;
-                    let tipo = el.dataset.tiempo;
-                    let horas = tipo === 'rato' ? 4 : 12;
-                    let key = 'timer_hab_'+id;
-                    let start = localStorage.getItem(key);
-                    if (!start) {
-                        localStorage.setItem(key, Date.now());
-                        start = Date.now();
-                    }
-                    timers[id] = setInterval(() => {
-                        let trans = Math.floor((Date.now() - start)/1000);
-                        let restante = horas*3600 - trans;
-                        let timerEl = document.getElementById('timer-'+id);
-                        if (restante > 0) {
-                            let h = Math.floor(restante/3600);
-                            let m = Math.floor((restante%3600)/60);
-                            let s = restante%60;
-                            timerEl.textContent = `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
-                        } else {
-                            timerEl.textContent = '¡Tiempo!';
-                            clearInterval(timers[id]);
-                        }
-                    }, 1000);
+        function pintarProductos() {
+            let total = 0;
+            document.querySelectorAll('.producto').forEach(boton => {
+                const cantidad = elegidos[boton.dataset.id] || 0;
+                boton.classList.toggle('elegido', cantidad > 0);
+                boton.querySelectorAll('.cantidad, .menos').forEach(e => e.remove());
+                if (cantidad > 0) {
+                    boton.insertAdjacentHTML('beforeend', `<span class="cantidad">${cantidad}</span><span class="menos" role="button">−</span>`);
+                    total += cantidad * Number(boton.dataset.precio);
                 }
             });
+            document.getElementById('productos-total').textContent = pesos(total);
         }
-        window.onload = iniciarTimers;
+        document.querySelectorAll('.producto').forEach(boton => {
+            boton.addEventListener('click', evento => {
+                const id = boton.dataset.id;
+                const actual = elegidos[id] || 0;
+                if (evento.target.classList.contains('menos')) {
+                    if (actual <= 1) delete elegidos[id]; else elegidos[id] = actual - 1;
+                } else if (actual < Number(boton.dataset.stock)) {
+                    elegidos[id] = actual + 1;
+                }
+                pintarProductos();
+            });
+        });
+        function filtrarProductos(texto) {
+            texto = texto.trim().toLowerCase();
+            document.querySelectorAll('.producto').forEach(b => { b.style.display = b.dataset.nombre.includes(texto) ? '' : 'none'; });
+        }
+        document.getElementById('buscar-producto').addEventListener('input', e => filtrarProductos(e.target.value));
+        async function guardarProductos() {
+            const items = Object.entries(elegidos).map(([id_producto, cantidad]) => ({id_producto: Number(id_producto), cantidad}));
+            if (!items.length) { mostrarError('error-productos', 'Toca al menos un producto.'); return; }
+            if (await enviar('/api/ventas/productos', {id_ocupacion: ocupacionActual, items}, 'error-productos')) location.reload();
+        }
+        async function quitarProducto(boton) {
+            if (!confirm(`¿Quitar ${boton.dataset.nombre} de la cuenta? Las unidades vuelven al inventario.`)) return;
+            if (await enviar('/api/ventas/quitar_producto', {id_venta: Number(boton.dataset.venta)}, 'error-general')) location.reload();
+        }
+
+        // ---- Cobrar ----
+        function abrirCobro(idOcupacion) {
+            const c = CUENTAS[idOcupacion];
+            ocupacionActual = idOcupacion;
+            document.getElementById('cobro-hab').textContent = c.numero + (c.placa ? ' · ' + c.placa : '');
+            // SEGURIDAD: las filas se arman con textContent (nunca innerHTML) para
+            // que un nombre de producto con código no se ejecute en la página
+            const tabla = document.getElementById('cobro-detalle');
+            tabla.replaceChildren();
+            [[`Habitación (${c.tiempo})`, c.precio_habitacion]].concat(c.consumo.map(x => [`${x.cantidad}× ${x.nombre}`, x.total]))
+                .forEach(([concepto, valor]) => {
+                    const fila = tabla.insertRow();
+                    fila.insertCell().textContent = concepto;
+                    fila.insertCell().textContent = '$ ' + pesos(valor);
+                });
+            document.getElementById('cobro-total').textContent = pesos(c.total);
+            mostrarError('error-cobro', '');
+            document.getElementById('boton-cobrar').disabled = false;
+            document.getElementById('ventana-cobro').classList.add('abierta');
+        }
+        async function confirmarCobro() {
+            document.getElementById('boton-cobrar').disabled = true;  // evita doble clic = doble cobro
+            const datos = await enviar('/api/ventas/cobrar', {id_ocupacion: ocupacionActual}, 'error-cobro');
+            if (!datos) { document.getElementById('boton-cobrar').disabled = false; return; }
+            if (!datos.con_turno) alert(`Cobrado: $ ${datos.total}. Ojo: no tienes un turno abierto, así que este cobro no se sumó a ningún turno.`);
+            location.reload();
+        }
+
+        // ---- Anular (solo admin) ----
+        async function anular(idOcupacion) {
+            if (!confirm(`¿Anular la ocupación de la habitación ${CUENTAS[idOcupacion].numero}? Los productos vuelven al inventario y no se cobra nada.`)) return;
+            if (await enviar('/api/ventas/anular', {id_ocupacion: idOcupacion}, 'error-general')) location.reload();
+        }
+
+        // ---- Buscador de placa: resalta la habitación donde está el vehículo ----
+        document.getElementById('buscar-placa').addEventListener('input', e => {
+            const texto = e.target.value.replace(/[\s-]/g, '').toUpperCase();
+            document.querySelectorAll('.hab').forEach(h => {
+                const coincide = texto && (h.dataset.placa || '').includes(texto);
+                h.classList.toggle('resaltada', !!coincide);
+                h.classList.toggle('oculta', !!texto && !coincide);
+            });
+        });
+
+        // ---- Temporizadores (con la hora de entrada guardada en el servidor) ----
+        function actualizarTimers() {
+            const ahora = Date.now() + DESFASE;
+            document.querySelectorAll('.timer').forEach(t => {
+                let restante = Math.round((Number(t.dataset.fin) - ahora) / 1000);
+                const vencido = restante < 0;
+                restante = Math.abs(restante);
+                const h = Math.floor(restante / 3600), m = Math.floor(restante % 3600 / 60), s = restante % 60;
+                const texto = `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+                t.textContent = vencido ? `⏰ +${texto} pasado` : `⏳ ${texto}`;
+                t.classList.toggle('vencido', vencido);
+            });
+        }
+        actualizarTimers();
+        setInterval(actualizarTimers, 1000);
+        document.querySelectorAll('.ventana').forEach(v => v.addEventListener('click', e => { if (e.target === v) v.classList.remove('abierta'); }));
     </script>
-</main>
+    {% endif %}
+</div>
 {% endblock %}
