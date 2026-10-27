@@ -17,7 +17,7 @@ try:
 except ImportError:
     from backports.zoneinfo import ZoneInfo
 
-from flask import Flask, render_template, redirect, url_for, request, session, flash, jsonify, abort
+from flask import Flask, render_template, redirect, url_for, request, session, flash, jsonify, abort, g
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.middleware.proxy_fix import ProxyFix
 import psycopg2
@@ -226,6 +226,96 @@ def proteger_csrf():
 
 
 # =====================================================================
+# SEGURIDAD DE ENLACES: muro de acceso para la página principal y los módulos
+# ---------------------------------------------------------------------
+# Antes, cada ruta se protegía por separado. Si alguien sin sesión abría el
+# enlace de un módulo (p. ej. /ventas), rebotaba por /panel_admin con el
+# mensaje "No tienes permisos..." y luego llegaba al login. Además, un enlace
+# que existía respondía 302 y uno inventado 404, así que se podía averiguar
+# qué módulos hay. Este muro revisa TODA petición antes de llegar a su ruta:
+#
+# 1. Solo la página principal y lo que necesita (carrito, reserva, login y
+#    archivos estáticos) es público. Cualquier otro enlace, exista o no,
+#    exige sesión: sin sesión siempre se va al login (o 401 en las APIs), sin
+#    revelar si el enlace existe.
+# 2. Con sesión, los enlaces de cada módulo (página y sus APIs) exigen el
+#    permiso de ese módulo. Es una segunda capa: cada ruta sigue validando
+#    lo suyo (por ejemplo, las acciones que son solo de administradores).
+# 3. Si se abrió un enlace de un módulo sin sesión, se recuerda en la sesión
+#    (no en la URL) para volver a él después de iniciar sesión. Al no usar un
+#    parámetro ?next=, nadie puede fabricar un enlace de login que redirija a
+#    una página falsa (redirección abierta).
+# 4. Cada intento bloqueado queda en el log con la IP.
+# =====================================================================
+RUTAS_PUBLICAS = {'/', '/cart', '/reservar', '/login', '/logout'}
+PREFIJOS_PUBLICOS = ('/static/', '/eliminar/')
+
+# Enlace del módulo -> permisos que lo abren (cualquiera de ellos)
+PERMISO_POR_ENLACE = {
+    '/habitaciones': {'habitaciones'},
+    '/api/habitacion_estado': {'habitaciones', 'ventas'},  # el tablero de ventas también cambia estados
+    '/turnos': {'turnos'},
+    '/inventario': {'inventario'},
+    '/ventas': {'ventas'},
+    '/api/ventas': {'ventas'},
+    '/nomina': {'nomina'},
+    '/usuarios': {'usuarios'},
+    '/api/usuarios': {'usuarios'},
+    '/permisos': {'permisos'},
+    '/aseo': {'aseo'},
+    '/api/aseo': {'aseo'},
+}
+
+
+def es_ruta_publica(ruta):
+    return ruta in RUTAS_PUBLICAS or ruta.startswith(PREFIJOS_PUBLICOS)
+
+
+def permisos_del_enlace(ruta):
+    # Compara por segmentos completos: '/ventas' cubre '/ventas' y
+    # '/ventas/...', pero no un enlace inventado como '/ventasfalsas'
+    for prefijo, permisos in PERMISO_POR_ENLACE.items():
+        if ruta == prefijo or ruta.startswith(prefijo + '/'):
+            return permisos
+    return None
+
+
+def es_destino_seguro(destino):
+    # Solo rutas internas: empieza por "/" pero no por "//" ni "/\" (que el
+    # navegador interpretaría como otro sitio web)
+    return bool(destino) and destino.startswith('/') and not destino.startswith(('//', '/\\'))
+
+
+@app.before_request
+def muro_de_acceso():
+    ruta = request.path
+    if es_ruta_publica(ruta):
+        return None
+    # Peticiones hechas con fetch() (llevan la cabecera X-CSRFToken o JSON)
+    # reciben JSON; un formulario o un enlace normal se redirige
+    es_api = ruta.startswith('/api/') or request.is_json or 'X-CSRFToken' in request.headers
+
+    usuario = obtener_usuario_actual()
+    if not usuario:
+        app.logger.warning('Enlace protegido sin sesión: %s %s desde %s', request.method, ruta, request.remote_addr)
+        if es_api:
+            return jsonify({'ok': False, 'msg': 'Debes iniciar sesión.'}), 401
+        # Recordar el módulo pedido solo si es un enlace real de la app
+        if permisos_del_enlace(ruta) and es_destino_seguro(ruta):
+            session['destino_tras_login'] = ruta
+        return redirect(url_for('login'))
+
+    permisos = permisos_del_enlace(ruta)
+    if permisos and not (permisos & set(obtener_permisos_usuario())):
+        app.logger.warning('Enlace de módulo sin permiso: %s %s para %s', request.method, ruta, usuario['correo'])
+        if es_api:
+            return jsonify({'ok': False, 'msg': 'No autorizado'}), 403
+        flash('No tienes permisos para acceder a este módulo.')
+        return redirect(url_for('panel_admin'))
+    return None
+
+
+# =====================================================================
 # SEGURIDAD: Cabeceras HTTP de seguridad en todas las respuestas
 # =====================================================================
 @app.after_request
@@ -234,8 +324,15 @@ def agregar_cabeceras_seguridad(respuesta):
     respuesta.headers['X-Content-Type-Options'] = 'nosniff'
     # Impide que otra web incruste MotelFlow en un iframe (clickjacking)
     respuesta.headers['X-Frame-Options'] = 'DENY'
-    # No envía la URL completa a sitios externos (p. ej. al abrir WhatsApp)
-    respuesta.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+    # SEGURIDAD DE ENLACES: los enlaces internos (p. ej. /nomina/comprobante/12)
+    # nunca se envían a otros sitios; antes se enviaba el dominio. 'same-origin'
+    # solo comparte la dirección dentro de MotelFlow.
+    respuesta.headers['Referrer-Policy'] = 'same-origin'
+    # SEGURIDAD DE ENLACES: una página externa abierta desde MotelFlow (o que
+    # abra MotelFlow) no puede controlar esta ventana con window.opener, y
+    # otros sitios no pueden incrustar recursos de MotelFlow.
+    respuesta.headers['Cross-Origin-Opener-Policy'] = 'same-origin'
+    respuesta.headers['Cross-Origin-Resource-Policy'] = 'same-origin'
     # Desactiva APIs del navegador que la app no usa
     respuesta.headers['Permissions-Policy'] = 'camera=(), microphone=(), geolocation=()'
     # Política de contenido: solo se cargan scripts, estilos y medios del propio
@@ -401,10 +498,17 @@ def obtener_usuario_por_correo(correo):
 def obtener_usuario_actual():
     if 'usuario' not in session:
         return None
+    # RENDIMIENTO: el muro de acceso, validar_acceso() y la ruta piden el
+    # usuario varias veces en la misma petición; se consulta una sola vez y se
+    # guarda en g (que se borra al terminar cada petición, así cada clic
+    # vuelve a comprobar que el usuario sigue Activo).
+    if 'usuario_actual' in g:
+        return g.usuario_actual
     usuario = obtener_usuario_por_correo(session['usuario'])
     if not usuario or (usuario.get('estado') or '').lower() != 'activo':
         session.clear()
-        return None
+        usuario = None
+    g.usuario_actual = usuario
     return usuario
 
 def es_admin(usuario):
@@ -576,6 +680,9 @@ def login():
                 flash('Tu usuario está inactivo. Comunícate con el administrador.')
                 return redirect(url_for('login'))
             intentos_login.pop(clave, None)
+            # SEGURIDAD DE ENLACES: módulo que se intentó abrir antes de iniciar
+            # sesión (guardado por el muro de acceso); se lee antes de limpiar
+            destino = session.get('destino_tras_login')
             # SEGURIDAD: se limpia la sesión anterior antes de autenticar
             # (evita la "fijación de sesión") y se genera un token CSRF nuevo
             session.clear()
@@ -583,8 +690,11 @@ def login():
             session['usuario'] = usuario['correo']
             session['rol'] = usuario['rol']
             app.logger.info('Inicio de sesión exitoso: %s', usuario['correo'])
-            # Ambos Admin y Colaborador van a /admin que redirige a /panel_admin
-            return redirect(url_for('admin'))
+            # Vuelve al módulo pedido solo si es un enlace interno de la app;
+            # si no, va al panel (el muro revisa además el permiso del módulo)
+            if es_destino_seguro(destino) and permisos_del_enlace(destino):
+                return redirect(destino)
+            return redirect(url_for('panel_admin'))
         else:
             if not usuario:
                 # Misma demora que con un usuario real (no revela si el correo existe)
@@ -674,7 +784,10 @@ def habitaciones():
 
 @app.route('/admin', methods=['GET'])
 def admin():
-    return render_template('admin.html')
+    # SEGURIDAD DE ENLACES: antes devolvía una página (200) a cualquiera y la
+    # redirección se hacía con JavaScript; ahora el muro exige sesión y la
+    # redirección la hace el servidor.
+    return redirect(url_for('panel_admin'))
 
 # Crear turno (POST desde empleados.html)
 @app.route('/abrir_turno', methods=['POST'])
