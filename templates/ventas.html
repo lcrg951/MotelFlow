@@ -29,6 +29,12 @@
     .ventas .hab .consumo button { padding: 0 6px; font-size: 12px; cursor: pointer; }
     .ventas .hab .total { font-size: 18px; font-weight: bold; text-align: right; }
 
+    .ventas .estado-pago { font-weight: bold; text-align: right; padding: 3px 6px; border-radius: 6px; }
+    .ventas .estado-pago.pendiente { background: #b71c1c; color: #fff; }
+    .ventas .estado-pago.pagado { background: #2e7d32; color: #fff; }
+    .ventas .hab .botones button:disabled { opacity: .45; cursor: not-allowed; }
+    .ventas button.eliminar { background: #fff; color: #b71c1c; border: 1px solid #b71c1c; }
+
     /* Ventanas (productos y cobro) */
     .ventas .ventana { position: fixed; inset: 0; background: rgba(0,0,0,.4); display: none; align-items: center; justify-content: center; z-index: 50; }
     .ventas .ventana.abierta { display: flex; }
@@ -78,10 +84,21 @@
             </ul>
             {% endif %}
             <div class="total">Total $ {{ h.total|pesos }}</div>
+            <!-- Estado del pago: pendiente (rojo) o pagado (verde) -->
+            {% if h.pendiente > 0 %}
+            <div class="estado-pago pendiente">Por cobrar $ {{ h.pendiente|pesos }}{% if h.monto_pagado > 0 %} <small>(ya pagó $ {{ h.monto_pagado|pesos }})</small>{% endif %}</div>
+            {% else %}
+            <div class="estado-pago pagado">✅ Pagado</div>
+            {% endif %}
             <div class="botones">
                 <button type="button" onclick="abrirProductos({{ h.id_ocupacion }})">+ Productos</button>
-                <button type="button" onclick="abrirCobro({{ h.id_ocupacion }})">💲 Cobrar y liberar</button>
-                {% if es_admin %}<button type="button" onclick="anular({{ h.id_ocupacion }})" title="Solo administradores">Anular</button>{% endif %}
+                {% if h.pendiente > 0 %}
+                <button type="button" onclick="abrirCobro({{ h.id_ocupacion }})">💲 Cobrar</button>
+                {% endif %}
+                <!-- Liberar solo se activa cuando no queda nada por cobrar -->
+                <button type="button" onclick="liberar({{ h.id_ocupacion }})" {% if h.pendiente > 0 %}disabled title="Primero cobra el saldo pendiente"{% endif %}>🚪 Liberar</button>
+                <!-- SEGURIDAD: el botón solo existe para administradores; el servidor también lo verifica -->
+                {% if es_admin %}<button type="button" class="eliminar" data-ocupacion="{{ h.id_ocupacion }}" data-numero="{{ h.numero }}" onclick="eliminarCuenta(this)" title="Solo administradores">🗑 Eliminar cuenta</button>{% endif %}
             </div>
         </div>
         {% elif h.estado == 'Libre' %}
@@ -118,9 +135,9 @@
     <h2>Últimas cuentas cerradas</h2>
     <div style="overflow-x:auto;">
         <table class="historial">
-            <tr><th>Hab.</th><th>Placa</th><th>Tiempo</th><th>Entrada</th><th>Salida</th><th>Habitación</th><th>Total</th><th>Estado</th><th>Cobró</th></tr>
+            <tr><th>Hab.</th><th>Placa</th><th>Tiempo</th><th>Entrada</th><th>Salida</th><th>Habitación</th><th>Total</th><th>Estado</th><th>Cobró</th>{% if es_admin %}<th></th>{% endif %}</tr>
             {% for o in historial %}
-            <tr>
+            <tr {% if o.estado == 'Eliminada' %}style="text-decoration:line-through;color:#888;"{% endif %}>
                 <td>{{ o.numero }}</td>
                 <td>{{ o.placa or '—' }}</td>
                 <td>{{ o.tiempo|capitalize }}</td>
@@ -128,11 +145,21 @@
                 <td>{{ o.salida_local.strftime('%d/%m %I:%M %p') if o.salida_local }}</td>
                 <td>$ {{ o.precio_habitacion|pesos }}</td>
                 <td><strong>$ {{ o.total|pesos }}</strong></td>
-                <td>{{ o.estado }}</td>
+                <td style="text-decoration:none;">
+                    {{ o.estado }}
+                    {% if o.estado == 'Eliminada' %}<br><small>por {{ o.eliminado_por }}: {{ o.motivo_eliminacion }}</small>{% endif %}
+                </td>
                 <td>{{ o.empleado }}</td>
+                {% if es_admin %}
+                <td>
+                    {% if o.estado == 'Cerrada' %}
+                    <button type="button" class="eliminar" data-ocupacion="{{ o.id }}" data-numero="{{ o.numero }}" onclick="eliminarCuenta(this)" title="Solo administradores">🗑</button>
+                    {% endif %}
+                </td>
+                {% endif %}
             </tr>
             {% else %}
-            <tr><td colspan="9">Todavía no hay cuentas cerradas.</td></tr>
+            <tr><td colspan="10">Todavía no hay cuentas cerradas.</td></tr>
             {% endfor %}
         </table>
     </div>
@@ -165,10 +192,12 @@
         <div class="caja">
             <h3>Cobrar habitación <span id="cobro-hab"></span></h3>
             <table class="resumen" id="cobro-detalle"></table>
-            <p style="font-size:22px;">Total a cobrar: <strong>$ <span id="cobro-total"></span></strong></p>
+            <p>Total de la cuenta: $ <span id="cobro-total"></span><span id="cobro-pagado"></span></p>
+            <p style="font-size:22px;">Por cobrar ahora: <strong>$ <span id="cobro-pendiente"></span></strong></p>
+            <p style="font-size:13px;color:#555;">La habitación sigue ocupada. Para cerrarla usa "Liberar".</p>
             <p class="error" id="error-cobro"></p>
             <div class="barra">
-                <button type="button" id="boton-cobrar" onclick="confirmarCobro()">Confirmar cobro y liberar</button>
+                <button type="button" id="boton-cobrar" onclick="confirmarCobro()">Confirmar cobro</button>
                 <button type="button" onclick="cerrar('ventana-cobro')">Cancelar</button>
             </div>
         </div>
@@ -279,6 +308,8 @@
                     fila.insertCell().textContent = '$ ' + pesos(valor);
                 });
             document.getElementById('cobro-total').textContent = pesos(c.total);
+            document.getElementById('cobro-pagado').textContent = c.pagado > 0 ? ` · ya pagado $ ${pesos(c.pagado)}` : '';
+            document.getElementById('cobro-pendiente').textContent = pesos(c.pendiente);
             mostrarError('error-cobro', '');
             document.getElementById('boton-cobrar').disabled = false;
             document.getElementById('ventana-cobro').classList.add('abierta');
@@ -287,14 +318,26 @@
             document.getElementById('boton-cobrar').disabled = true;  // evita doble clic = doble cobro
             const datos = await enviar('/api/ventas/cobrar', {id_ocupacion: ocupacionActual}, 'error-cobro');
             if (!datos) { document.getElementById('boton-cobrar').disabled = false; return; }
-            if (!datos.con_turno) alert(`Cobrado: $ ${datos.total}. Ojo: no tienes un turno abierto, así que este cobro no se sumó a ningún turno.`);
+            if (!datos.con_turno) alert(`Cobrado: $ ${datos.cobrado}. Ojo: no tienes un turno abierto, así que este cobro no se sumó a ningún turno.`);
             location.reload();
         }
 
-        // ---- Anular (solo admin) ----
-        async function anular(idOcupacion) {
-            if (!confirm(`¿Anular la ocupación de la habitación ${CUENTAS[idOcupacion].numero}? Los productos vuelven al inventario y no se cobra nada.`)) return;
-            if (await enviar('/api/ventas/anular', {id_ocupacion: idOcupacion}, 'error-general')) location.reload();
+        // ---- Liberar (cierra la estadía; el servidor exige que esté todo pagado) ----
+        async function liberar(idOcupacion) {
+            if (!confirm(`¿Liberar la habitación ${CUENTAS[idOcupacion].numero}? Quedará por limpiar.`)) return;
+            if (await enviar('/api/ventas/liberar', {id_ocupacion: idOcupacion}, 'error-general')) location.reload();
+        }
+
+        // ---- Eliminar cuenta (solo administradores; el servidor lo vuelve a verificar) ----
+        async function eliminarCuenta(boton) {
+            const numero = boton.dataset.numero;
+            const motivo = prompt(`Vas a ELIMINAR la cuenta de la habitación ${numero}.\n\n` +
+                'Los productos vuelven al inventario y lo cobrado se resta del turno.\n' +
+                'Escribe el motivo (obligatorio):');
+            if (motivo === null) return;  // canceló
+            if (motivo.trim().length < 5) { alert('El motivo debe tener al menos 5 caracteres.'); return; }
+            if (!confirm(`¿Confirmas eliminar la cuenta de la habitación ${numero}? Esta acción queda registrada.`)) return;
+            if (await enviar('/api/ventas/eliminar', {id_ocupacion: Number(boton.dataset.ocupacion), motivo: motivo.trim()}, 'error-general')) location.reload();
         }
 
         // ---- Buscador de placa: resalta la habitación donde está el vehículo ----

@@ -805,16 +805,21 @@ def inventario():
 #
 # Flujo rápido desde el tablero de habitaciones:
 #   - Habitación libre:   escribir la placa + clic en "Rato" o "Amanecida".
-#   - Habitación ocupada: "+ Productos" (tocar cada producto suma 1) y
-#                         "Cobrar y liberar" (muestra el total y lo confirma).
+#   - Habitación ocupada: "+ Productos" (tocar cada producto suma 1),
+#                         "Cobrar" (cobra lo pendiente SIN liberar la
+#                         habitación) y "Liberar" (cierra la estadía; solo se
+#                         activa cuando ya no queda nada por cobrar).
+#                         Se puede cobrar varias veces: por ejemplo, la
+#                         habitación al entrar y los productos más tarde.
 #   - Habitación sucia:   clic en "Limpia" y vuelve a quedar libre.
 #   - Buscador de placa:  resalta la habitación donde está un vehículo.
 #
 # Resumen de lo que se agregó para este módulo:
-#   - Tabla nueva: ocupacion. La tabla venta recibe la columna id_ocupacion
+#   - Tablas nuevas: ocupacion (la estadía) y ocupacion_pago (cada cobro
+#     hecho a una estadía). La tabla venta recibe la columna id_ocupacion
 #     para saber a qué estadía pertenece cada producto.
 #   - Rutas: /ventas (tablero) y las APIs /api/ventas/ocupar, /productos,
-#     /quitar_producto, /cobrar, /limpiar y /anular.
+#     /quitar_producto, /cobrar, /liberar, /limpiar y /eliminar.
 #
 # SEGURIDAD:
 #   - Solo entra quien tenga el permiso "ventas".
@@ -826,8 +831,12 @@ def inventario():
 #   - Ocupar, descontar inventario y cobrar se hacen con consultas
 #     "atómicas": si dos personas tocan la misma habitación a la vez, solo
 #     una lo logra; y el stock nunca puede quedar negativo.
-#   - Quitar un producto devuelve las unidades al inventario. Anular una
-#     ocupación completa es solo para administradores.
+#   - No se puede liberar una habitación con saldo pendiente (nadie sale
+#     sin pagar), ni quitar un producto que ya fue cobrado.
+#   - Quitar un producto devuelve las unidades al inventario.
+#   - ELIMINAR una cuenta es exclusivo de los administradores: exige un
+#     motivo, deshace inventario y cobros del turno, y la cuenta queda
+#     marcada como "Eliminada" (con quién, cuándo y por qué), nunca se borra.
 #   - Todas las acciones quedan en el log con quién las hizo.
 # =====================================================================
 
@@ -844,8 +853,13 @@ _tablas_ventas_listas = False
 
 # Crea la tabla ocupacion y enlaza la tabla venta con ella.
 #   - ocupacion: una fila por cada estadía. "estado" es Activa mientras el
-#     cliente está en la habitación, Cerrada cuando ya pagó y Anulada si se
-#     registró por error. La placa va cifrada y su huella sirve para buscar.
+#     cliente está en la habitación, Cerrada cuando ya pagó y se liberó,
+#     Eliminada si un administrador la eliminó (Anulada: versión anterior). La placa va cifrada y su huella sirve para buscar.
+#   - ocupacion.monto_pagado: cuánto se ha cobrado de esa estadía. Lo
+#     pendiente es (habitación + productos) - monto_pagado.
+#   - ocupacion_pago: cada cobro, con su monto, quién cobró y a qué turno
+#     se sumó (una estadía puede cobrarse en varias partes y turnos).
+#     La columna ocupacion.id_turno queda de la versión anterior.
 #   - venta.id_ocupacion: a qué estadía pertenece cada producto vendido.
 #   - El índice único parcial impide que una habitación tenga dos
 #     ocupaciones activas al mismo tiempo, aunque dos personas hagan clic a la vez.
@@ -874,6 +888,23 @@ def asegurar_tablas_ventas(conn):
             ON ocupacion (id_habitacion) WHERE estado = 'Activa';
         CREATE INDEX IF NOT EXISTS ocupacion_placa_huella ON ocupacion (placa_huella);
         ALTER TABLE venta ADD COLUMN IF NOT EXISTS id_ocupacion INTEGER REFERENCES ocupacion(id);
+        ALTER TABLE ocupacion ADD COLUMN IF NOT EXISTS monto_pagado NUMERIC(12,2) NOT NULL DEFAULT 0;
+        -- Rastro de las cuentas eliminadas por un administrador
+        ALTER TABLE ocupacion ADD COLUMN IF NOT EXISTS motivo_eliminacion VARCHAR(200);
+        ALTER TABLE ocupacion ADD COLUMN IF NOT EXISTS eliminado_por INTEGER REFERENCES usuario(id);
+        ALTER TABLE ocupacion ADD COLUMN IF NOT EXISTS fecha_eliminacion TIMESTAMP;
+        CREATE TABLE IF NOT EXISTS ocupacion_pago (
+            id SERIAL PRIMARY KEY,
+            id_ocupacion INTEGER NOT NULL REFERENCES ocupacion(id),
+            monto NUMERIC(12,2) NOT NULL CHECK (monto > 0),
+            id_usuario INTEGER NOT NULL REFERENCES usuario(id),
+            id_turno INTEGER REFERENCES turno(id),
+            fecha TIMESTAMP NOT NULL DEFAULT NOW()
+        );
+        -- Las estadías cerradas con la versión anterior (cobrar y liberar en
+        -- un solo paso) ya se cobraron completas
+        UPDATE ocupacion SET monto_pagado = total
+        WHERE estado = 'Cerrada' AND monto_pagado = 0 AND total > 0;
     """)
     conn.commit()
     cur.close()
@@ -927,7 +958,8 @@ def ventas():
 
     # Habitaciones con su ocupación activa (si la tienen)
     cur.execute("""SELECT h.id, h.numero, h.tipo, h.precio_estandar, h.estado,
-                          o.id AS id_ocupacion, o.placa_cifrada, o.tiempo, o.hora_entrada, o.precio_habitacion
+                          o.id AS id_ocupacion, o.placa_cifrada, o.tiempo, o.hora_entrada, o.precio_habitacion,
+                          o.monto_pagado
                    FROM habitacion h
                    LEFT JOIN ocupacion o ON o.id_habitacion = h.id AND o.estado = 'Activa'
                    ORDER BY h.numero""")
@@ -951,21 +983,27 @@ def ventas():
             h['consumo'] = consumos.get(h['id_ocupacion'], [])
             h['total_productos'] = sum(c['total_pago'] for c in h['consumo'])
             h['total'] = h['precio_habitacion'] + h['total_productos']
+            # Lo que falta por cobrar (si es 0, ya se puede liberar)
+            h['pendiente'] = max(h['total'] - h['monto_pagado'], Decimal('0'))
             h['entrada_ms'] = a_milisegundos(h['hora_entrada'])
             h['entrada_local'] = convertir_a_hora_local(h['hora_entrada'])
             h['duracion_ms'] = DURACION_TIEMPOS.get(h['tiempo'], 4) * 3600 * 1000
             cuentas[h['id_ocupacion']] = {
                 'numero': h['numero'], 'placa': h['placa'], 'tiempo': h['tiempo'],
                 'precio_habitacion': float(h['precio_habitacion']), 'total': float(h['total']),
+                'pagado': float(h['monto_pagado']), 'pendiente': float(h['pendiente']),
                 'consumo': [{'cantidad': c['cantidad'], 'nombre': c['nombre'], 'total': float(c['total_pago'])} for c in h['consumo']],
             }
         h.pop('placa_cifrada', None)
 
-    # Historial: últimas 50 estadías cerradas o anuladas
+    # Historial: últimas 50 cuentas cerradas, anuladas o eliminadas (con el
+    # motivo y quién la eliminó, para que el administrador pueda revisarlo)
     cur.execute("""SELECT o.id, o.placa_cifrada, o.tiempo, o.hora_entrada, o.hora_salida, o.estado,
-                          o.precio_habitacion, o.total, h.numero, u.nombres AS empleado
+                          o.precio_habitacion, o.total, o.motivo_eliminacion, h.numero, u.nombres AS empleado,
+                          e.nombres AS eliminado_por
                    FROM ocupacion o JOIN habitacion h ON h.id = o.id_habitacion
                    LEFT JOIN usuario u ON u.id = COALESCE(o.id_usuario_salida, o.id_usuario_entrada)
+                   LEFT JOIN usuario e ON e.id = o.eliminado_por
                    WHERE o.estado <> 'Activa'
                    ORDER BY o.hora_salida DESC NULLS LAST, o.id DESC LIMIT 50""")
     historial = cur.fetchall()
@@ -1080,7 +1118,7 @@ def api_ventas_productos():
     app.logger.info('Productos agregados a la ocupación %s por %s', id_ocupacion, usuario['correo'])
     return jsonify({'ok': True})
 
-# --- API: Quitar un producto mal registrado (antes de cobrar) ---
+# --- API: Quitar un producto mal registrado (antes de cobrarlo) ---
 # Recibe {"id_venta": 15}. Devuelve las unidades al inventario.
 @app.route('/api/ventas/quitar_producto', methods=['POST'])
 def api_ventas_quitar_producto():
@@ -1094,15 +1132,18 @@ def api_ventas_quitar_producto():
     asegurar_tablas_ventas(conn)
     cur = conn.cursor()
     try:
-        # SEGURIDAD: solo se pueden quitar productos de una estadía que sigue
-        # activa; lo ya cobrado no se modifica
+        # SEGURIDAD: solo se pueden quitar productos de una estadía activa y
+        # que NO estén cobrados: después de quitarlo, lo pagado no puede
+        # quedar por encima del nuevo total (si no, habría que devolver dinero)
         cur.execute("""DELETE FROM venta v USING ocupacion o
                        WHERE v.id = %s AND o.id = v.id_ocupacion AND o.estado = 'Activa'
+                         AND o.monto_pagado <= o.precio_habitacion
+                             + (SELECT SUM(x.total_pago) FROM venta x WHERE x.id_ocupacion = o.id) - v.total_pago
                        RETURNING v.id_producto, v.cantidad""", (id_venta,))
         venta = cur.fetchone()
         if not venta:
             conn.rollback()
-            return respuesta_error('Ese producto ya no se puede quitar (la cuenta está cerrada).', 409)
+            return respuesta_error('Ese producto ya no se puede quitar: ya fue cobrado o la cuenta está cerrada.', 409)
         cur.execute("UPDATE inventario SET stock_actual = stock_actual + %s WHERE id = %s", (venta['cantidad'], venta['id_producto']))
         conn.commit()
     finally:
@@ -1111,10 +1152,27 @@ def api_ventas_quitar_producto():
     app.logger.info('Venta %s quitada (stock devuelto) por %s', id_venta, usuario['correo'])
     return jsonify({'ok': True})
 
-# --- API: Cobrar y liberar ---
-# Recibe {"id_ocupacion": 7}. Calcula el total en el servidor (habitación +
-# productos), cierra la estadía, suma el cobro al turno abierto de quien
-# cobra y deja la habitación "Sucia" para el aseo.
+# Bloquea la estadía activa (FOR UPDATE) y calcula su cuenta con los
+# valores de la BD. Mientras dure la transacción, nadie más puede cobrarla
+# ni liberarla: si dos personas pulsan "Cobrar" a la vez, la segunda espera
+# y luego ve que ya no hay saldo pendiente (así no se cobra dos veces).
+# Devuelve None si la estadía no existe o ya no está activa.
+def bloquear_cuenta(cur, id_ocupacion):
+    cur.execute("""SELECT id, id_habitacion, precio_habitacion, monto_pagado FROM ocupacion
+                   WHERE id = %s AND estado = 'Activa' FOR UPDATE""", (id_ocupacion,))
+    cuenta = cur.fetchone()
+    if not cuenta:
+        return None
+    cur.execute("SELECT COALESCE(SUM(total_pago), 0) AS productos FROM venta WHERE id_ocupacion = %s", (id_ocupacion,))
+    cuenta['total'] = cuenta['precio_habitacion'] + cur.fetchone()['productos']
+    cuenta['pendiente'] = cuenta['total'] - cuenta['monto_pagado']
+    return cuenta
+
+# --- API: Cobrar (sin liberar la habitación) ---
+# Recibe {"id_ocupacion": 7}. Cobra lo que esté pendiente (habitación y/o
+# productos), lo registra en ocupacion_pago y lo suma al turno abierto de
+# quien cobra. La habitación sigue ocupada: si luego se piden más
+# productos, quedan como nuevo saldo pendiente para cobrar otra vez.
 @app.route('/api/ventas/cobrar', methods=['POST'])
 def api_ventas_cobrar():
     usuario, error = validar_api_ventas()
@@ -1128,28 +1186,62 @@ def api_ventas_cobrar():
     asegurar_tablas_ventas(conn)
     cur = conn.cursor()
     try:
-        # SEGURIDAD: el total se calcula en la misma consulta que cierra la
-        # cuenta, con los valores de la BD (habitación + suma de productos).
-        # "AND estado = 'Activa'" evita cobrar dos veces la misma estadía.
-        cur.execute("""UPDATE ocupacion SET estado = 'Cerrada', hora_salida = NOW(), id_usuario_salida = %s, id_turno = %s,
-                           total = precio_habitacion + (SELECT COALESCE(SUM(total_pago), 0) FROM venta WHERE id_ocupacion = %s)
-                       WHERE id = %s AND estado = 'Activa' RETURNING id_habitacion, total""",
-                    (usuario['id'], turno['id'] if turno else None, id_ocupacion, id_ocupacion))
-        cerrada = cur.fetchone()
-        if not cerrada:
+        # SEGURIDAD: el monto a cobrar lo calcula el servidor, nunca el navegador
+        cuenta = bloquear_cuenta(cur, id_ocupacion)
+        if not cuenta:
             conn.rollback()
-            return respuesta_error('Esta habitación ya fue cobrada.', 409)
-        cur.execute("UPDATE habitacion SET estado = 'Sucia', tiempo = NULL WHERE id = %s", (cerrada['id_habitacion'],))
+            return respuesta_error('La habitación ya no está ocupada.', 409)
+        if cuenta['pendiente'] <= 0:
+            conn.rollback()
+            return respuesta_error('Esta cuenta no tiene saldo pendiente: ya se cobró todo.', 409)
+        cobrado = cuenta['pendiente']
+        cur.execute("UPDATE ocupacion SET monto_pagado = %s, total = %s WHERE id = %s",
+                    (cuenta['total'], cuenta['total'], id_ocupacion))
+        cur.execute("INSERT INTO ocupacion_pago (id_ocupacion, monto, id_usuario, id_turno) VALUES (%s, %s, %s, %s)",
+                    (id_ocupacion, cobrado, usuario['id'], turno['id'] if turno else None))
         # El cobro se suma al recaudo del turno abierto de quien cobra
         if turno:
             cur.execute("UPDATE turno SET recaudo_total = COALESCE(recaudo_total, 0) + %s WHERE id = %s",
-                        (cerrada['total'], turno['id']))
+                        (cobrado, turno['id']))
         conn.commit()
     finally:
         cur.close()
         conn.close()
-    app.logger.info('Ocupación %s cobrada ($%s) por %s', id_ocupacion, cerrada['total'], usuario['correo'])
-    return jsonify({'ok': True, 'total': formato_pesos(cerrada['total']), 'con_turno': bool(turno)})
+    app.logger.info('Ocupación %s: cobro de $%s por %s', id_ocupacion, cobrado, usuario['correo'])
+    return jsonify({'ok': True, 'cobrado': formato_pesos(cobrado), 'con_turno': bool(turno)})
+
+# --- API: Liberar (cerrar la estadía) ---
+# Recibe {"id_ocupacion": 7}. Solo funciona si la cuenta está completamente
+# pagada. Cierra la estadía y deja la habitación "Sucia" para el aseo.
+@app.route('/api/ventas/liberar', methods=['POST'])
+def api_ventas_liberar():
+    usuario, error = validar_api_ventas()
+    if error:
+        return error
+    id_ocupacion = leer_entero((request.get_json(silent=True) or {}).get('id_ocupacion'), minimo=1)
+    if not id_ocupacion:
+        return respuesta_error('Ocupación inválida.')
+    conn = get_db_connection()
+    asegurar_tablas_ventas(conn)
+    cur = conn.cursor()
+    try:
+        cuenta = bloquear_cuenta(cur, id_ocupacion)
+        if not cuenta:
+            conn.rollback()
+            return respuesta_error('La habitación ya fue liberada.', 409)
+        # SEGURIDAD: nadie sale sin pagar; con saldo pendiente no se libera
+        if cuenta['pendiente'] > 0:
+            conn.rollback()
+            return respuesta_error(f"Falta cobrar $ {formato_pesos(cuenta['pendiente'])} antes de liberar la habitación.", 409)
+        cur.execute("""UPDATE ocupacion SET estado = 'Cerrada', hora_salida = NOW(), id_usuario_salida = %s, total = %s
+                       WHERE id = %s""", (usuario['id'], cuenta['total'], id_ocupacion))
+        cur.execute("UPDATE habitacion SET estado = 'Sucia', tiempo = NULL WHERE id = %s", (cuenta['id_habitacion'],))
+        conn.commit()
+    finally:
+        cur.close()
+        conn.close()
+    app.logger.info('Ocupación %s cerrada (habitación liberada) por %s', id_ocupacion, usuario['correo'])
+    return jsonify({'ok': True})
 
 # --- API: Marcar una habitación como limpia (Sucia -> Libre) ---
 # También sirve para liberar una habitación que quedó "Ocupada" sin
@@ -1165,8 +1257,8 @@ def api_ventas_limpiar():
     conn = get_db_connection()
     asegurar_tablas_ventas(conn)
     cur = conn.cursor()
-    # SEGURIDAD: nunca se libera una habitación con una estadía activa
-    # (primero hay que cobrarla o anularla)
+    # SEGURIDAD: nunca se marca libre una habitación con una estadía activa
+    # (primero hay que cobrarla y liberarla, o un admin debe eliminarla)
     cur.execute("""UPDATE habitacion SET estado = 'Libre', tiempo = NULL
                    WHERE id = %s AND estado IN ('Sucia', 'Ocupada')
                      AND NOT EXISTS (SELECT 1 FROM ocupacion WHERE id_habitacion = %s AND estado = 'Activa')
@@ -1180,40 +1272,77 @@ def api_ventas_limpiar():
     app.logger.info('Habitación %s marcada como libre por %s', habitacion['numero'], usuario['correo'])
     return jsonify({'ok': True})
 
-# --- API: Anular una ocupación registrada por error (solo admin) ---
-# Devuelve al inventario los productos, deja la estadía como "Anulada"
-# (no se borra, queda en el historial) y libera la habitación.
-@app.route('/api/ventas/anular', methods=['POST'])
-def api_ventas_anular():
+# --- API: Eliminar una cuenta (SOLO administradores) ---
+# Recibe {"id_ocupacion": 7, "motivo": "Se registró en la habitación equivocada"}.
+# Sirve para cuentas abiertas (aunque ya tengan cobros) y para cuentas ya
+# cerradas del historial. Deshace todo lo que hizo la cuenta:
+#   - los productos vuelven al inventario y sus ventas se borran;
+#   - lo cobrado se resta del recaudo de cada turno donde se sumó, para que
+#     la caja cuadre (si ese turno ya se cerró, su total queda corregido);
+#   - si la habitación seguía ocupada, vuelve a quedar libre.
+# SEGURIDAD: la cuenta NO se borra de la BD: queda con estado "Eliminada",
+# el motivo, quién la eliminó y cuándo. Así un borrado nunca pasa sin dejar
+# rastro. Los registros de ocupacion_pago también se conservan como respaldo.
+@app.route('/api/ventas/eliminar', methods=['POST'])
+def api_ventas_eliminar():
     usuario, error = validar_api_ventas()
     if error:
         return error
-    # SEGURIDAD: anular borra un cobro, por eso solo un administrador puede hacerlo
+    # SEGURIDAD: eliminar borra cobros e inventario vendido, por eso SOLO un
+    # administrador puede hacerlo (el intento de cualquier otra persona queda en el log)
     if not es_admin(usuario):
-        return respuesta_error('Solo un administrador puede anular una ocupación.', 403)
-    id_ocupacion = leer_entero((request.get_json(silent=True) or {}).get('id_ocupacion'), minimo=1)
+        app.logger.warning('Intento de eliminar una cuenta sin ser admin: %s', usuario['correo'])
+        return respuesta_error('Solo un administrador puede eliminar una cuenta.', 403)
+    data = request.get_json(silent=True) or {}
+    id_ocupacion = leer_entero(data.get('id_ocupacion'), minimo=1)
+    motivo = leer_texto(data.get('motivo'), 200)
     if not id_ocupacion:
-        return respuesta_error('Ocupación inválida.')
+        return respuesta_error('Cuenta inválida.')
+    # El motivo es obligatorio para que el borrado quede justificado
+    if not motivo or len(motivo) < 5:
+        return respuesta_error('Escribe el motivo de la eliminación (mínimo 5 caracteres).')
     conn = get_db_connection()
     asegurar_tablas_ventas(conn)
     cur = conn.cursor()
     try:
-        cur.execute("""UPDATE ocupacion SET estado = 'Anulada', hora_salida = NOW(), id_usuario_salida = %s, total = 0
-                       WHERE id = %s AND estado = 'Activa' RETURNING id_habitacion""", (usuario['id'], id_ocupacion))
-        anulada = cur.fetchone()
-        if not anulada:
+        # Se bloquea la cuenta para que nadie la cobre o libere mientras se elimina
+        cur.execute("""SELECT id, id_habitacion, estado, monto_pagado, id_turno FROM ocupacion
+                       WHERE id = %s AND estado IN ('Activa', 'Cerrada') FOR UPDATE""", (id_ocupacion,))
+        cuenta = cur.fetchone()
+        if not cuenta:
             conn.rollback()
-            return respuesta_error('Solo se puede anular una ocupación activa.', 409)
-        # Los productos vuelven al inventario y sus ventas se eliminan
+            return respuesta_error('Esa cuenta no existe o ya fue eliminada.', 409)
+
+        # 1. Restar lo cobrado de cada turno donde se sumó
+        cur.execute("""SELECT id_turno, SUM(monto) AS monto FROM ocupacion_pago
+                       WHERE id_ocupacion = %s AND id_turno IS NOT NULL GROUP BY id_turno""", (id_ocupacion,))
+        cobros_por_turno = cur.fetchall()
+        cur.execute("SELECT COUNT(*) AS n FROM ocupacion_pago WHERE id_ocupacion = %s", (id_ocupacion,))
+        if cur.fetchone()['n'] == 0 and cuenta['id_turno'] and cuenta['monto_pagado'] > 0:
+            # Cuenta de la versión anterior: el cobro se guardó en ocupacion.id_turno
+            cobros_por_turno = [{'id_turno': cuenta['id_turno'], 'monto': cuenta['monto_pagado']}]
+        for cobro in cobros_por_turno:
+            cur.execute("UPDATE turno SET recaudo_total = COALESCE(recaudo_total, 0) - %s WHERE id = %s",
+                        (cobro['monto'], cobro['id_turno']))
+
+        # 2. Devolver los productos al inventario y borrar sus ventas
         cur.execute("DELETE FROM venta WHERE id_ocupacion = %s RETURNING id_producto, cantidad", (id_ocupacion,))
         for venta in cur.fetchall():
             cur.execute("UPDATE inventario SET stock_actual = stock_actual + %s WHERE id = %s", (venta['cantidad'], venta['id_producto']))
-        cur.execute("UPDATE habitacion SET estado = 'Libre', tiempo = NULL WHERE id = %s", (anulada['id_habitacion'],))
+
+        # 3. Marcar la cuenta como eliminada (queda en la BD como respaldo)
+        cur.execute("""UPDATE ocupacion SET estado = 'Eliminada', motivo_eliminacion = %s, eliminado_por = %s,
+                           fecha_eliminacion = NOW(), hora_salida = COALESCE(hora_salida, NOW())
+                       WHERE id = %s""", (motivo, usuario['id'], id_ocupacion))
+
+        # 4. Si la habitación seguía ocupada, queda libre
+        if cuenta['estado'] == 'Activa':
+            cur.execute("UPDATE habitacion SET estado = 'Libre', tiempo = NULL WHERE id = %s", (cuenta['id_habitacion'],))
         conn.commit()
     finally:
         cur.close()
         conn.close()
-    app.logger.warning('Ocupación %s ANULADA por %s', id_ocupacion, usuario['correo'])
+    app.logger.warning('Cuenta (ocupación) %s ELIMINADA por %s. Motivo: %s', id_ocupacion, usuario['correo'], motivo)
     return jsonify({'ok': True})
 
 # =====================================================================
