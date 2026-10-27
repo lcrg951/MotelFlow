@@ -5,6 +5,7 @@ import json  # NÓMINA: convierte los datos de nómina a texto JSON antes de cif
 import os
 import re
 import secrets
+import threading  # RENDIMIENTO: candado del pool de conexiones
 import time
 # NÓMINA: se agregó "date" para manejar las fechas de los periodos de pago
 from datetime import date, datetime, timezone, timedelta
@@ -20,6 +21,7 @@ from flask import Flask, render_template, redirect, url_for, request, session, f
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.middleware.proxy_fix import ProxyFix
 import psycopg2
+import psycopg2.extensions
 from psycopg2.extras import RealDictCursor
 # NÓMINA / SEGURIDAD: librería de cifrado (pip install cryptography). Fernet
 # cifra y descifra con una clave secreta; InvalidToken es el error que lanza
@@ -93,11 +95,96 @@ DB_CONFIG = {
     'sslmode': 'require'
 }
 
-def get_db_connection():
+# =====================================================================
+# RENDIMIENTO: reutilización de conexiones (pool)
+# ---------------------------------------------------------------------
+# Medición: abrir una conexión nueva con Neon tarda 0,55–0,7 s (TLS +
+# autenticación), mientras que una consulta tarda ~0,08 s. Cada página abría
+# 2 o 3 conexiones (usuario, permisos, datos), así que casi todo su tiempo se
+# iba en conectarse. Ahora las conexiones se guardan abiertas y se reutilizan.
+#
+# El resto del código no cambia: sigue llamando get_db_connection() y
+# conn.close(); close() ya no cierra, sino que devuelve la conexión al pool.
+#
+# SEGURIDAD / CONFIABILIDAD:
+# - Al devolverla se hace ROLLBACK: nada que no se haya confirmado con
+#   commit() pasa al siguiente uso (igual que antes al cerrarla).
+# - Una conexión que lleva más de 30 s sin usarse se verifica con SELECT 1
+#   antes de entregarla; si Neon la cerró (p. ej. al suspenderse), se descarta
+#   y se abre otra, así el usuario nunca recibe una conexión rota.
+# - Se guardan como máximo DB_POOL_MAX conexiones libres (5 por defecto) para
+#   no agotar el límite de conexiones de Neon; las que sobran se cierran.
+# - Un candado (Lock) evita que dos hilos tomen la misma conexión.
+# =====================================================================
+MAX_CONEXIONES_LIBRES = int(os.environ.get('DB_POOL_MAX', 5))
+SEGUNDOS_SIN_VERIFICAR = 30
+_conexiones_libres = []
+_candado_pool = threading.Lock()
+
+
+class ConexionReutilizable(psycopg2.extensions.connection):
+    """Conexión de psycopg2 cuyo close() la devuelve al pool en vez de cerrarla."""
+
+    def close(self):
+        devolver_conexion(self)
+
+    def cerrar_de_verdad(self):
+        super().close()
+
+
+def _abrir_conexion():
+    opciones = {
+        'cursor_factory': RealDictCursor,
+        'connection_factory': ConexionReutilizable,
+        # Mantiene viva la conexión TCP y detecta rápido si se cayó
+        'keepalives': 1, 'keepalives_idle': 30, 'keepalives_interval': 10, 'keepalives_count': 3,
+    }
     if DATABASE_URL:
-        return psycopg2.connect(DATABASE_URL, sslmode='require', cursor_factory=RealDictCursor)
-    conn = psycopg2.connect(**DB_CONFIG, cursor_factory=RealDictCursor)
+        conn = psycopg2.connect(DATABASE_URL, sslmode='require', **opciones)
+    else:
+        conn = psycopg2.connect(**DB_CONFIG, **opciones)
+    conn.en_pool = False
+    conn.ultimo_uso = time.monotonic()
     return conn
+
+
+def get_db_connection():
+    while True:
+        with _candado_pool:
+            conn = _conexiones_libres.pop() if _conexiones_libres else None
+        if conn is None:
+            return _abrir_conexion()
+        conn.en_pool = False
+        if conn.closed:
+            continue
+        if time.monotonic() - conn.ultimo_uso > SEGUNDOS_SIN_VERIFICAR:
+            try:
+                cur = conn.cursor()
+                cur.execute("SELECT 1")
+                cur.close()
+                conn.rollback()
+            except psycopg2.Error:
+                conn.cerrar_de_verdad()
+                continue
+        return conn
+
+
+def devolver_conexion(conn):
+    # Evita devolverla dos veces si se llama close() de nuevo
+    if conn.closed or conn.en_pool:
+        return
+    try:
+        conn.rollback()  # descarta lo no confirmado
+    except psycopg2.Error:
+        conn.cerrar_de_verdad()
+        return
+    conn.ultimo_uso = time.monotonic()
+    with _candado_pool:
+        if len(_conexiones_libres) < MAX_CONEXIONES_LIBRES:
+            conn.en_pool = True
+            _conexiones_libres.append(conn)
+            return
+    conn.cerrar_de_verdad()
 
 LOCAL_ZONE = ZoneInfo('America/Bogota')
 
